@@ -13,6 +13,21 @@ local function notify_error(action, err)
   vim.notify("MarkdownTableWrap: " .. action .. ": " .. tostring(err), vim.log.levels.ERROR)
 end
 
+-- Reader <-> source buffer swaps are internal bookkeeping, not a navigation
+-- the user asked for. nvim_win_set_buf() still records a jump entry for
+-- them (same as `:buffer`), so plain `<C-o>` eventually lands back on the
+-- bare source buffer mid-transition; auto-preview then has to rebuild the
+-- Reader from scratch, which flashes the raw table for a frame. `keepjumps`
+-- keeps these swaps out of the user's jumplist so `<C-o>` only replays real
+-- jumps.
+local function set_win_buf_keepjumps(winid, bufnr)
+  return pcall(function()
+    vim.api.nvim_win_call(winid, function()
+      vim.cmd(("keepjumps buffer %d"):format(bufnr))
+    end)
+  end)
+end
+
 local function normalize_bufnr(bufnr)
   if not bufnr or bufnr == 0 then
     return vim.api.nvim_get_current_buf()
@@ -236,7 +251,25 @@ local function set_reader_keymaps(reader_bufnr)
 
   for _, key in ipairs(config.insert or {}) do
     map(key, function()
-      edit(key, false)
+      local source_bufnr = state.source_bufnr
+      edit(key, true)
+
+      -- The pause above stops auto-preview from racing the deferred key
+      -- redelivery and reopening Reader mid-keystroke (it would otherwise
+      -- yank the buffer out from under the pending insert). Once the user
+      -- actually leaves insert, undo the pause and re-render immediately
+      -- so the table doesn't stay stuck in plain source view.
+      if source_bufnr and vim.api.nvim_buf_is_valid(source_bufnr) then
+        vim.api.nvim_create_autocmd("InsertLeave", {
+          buffer = source_bufnr,
+          once = true,
+          callback = function()
+            local plugin = require("markdown-table-wrap")
+            plugin.state.paused_buffers[source_bufnr] = nil
+            plugin.schedule_refresh({ bufnr = source_bufnr, force = true })
+          end,
+        })
+      end
     end, "Edit Markdown source")
   end
 
@@ -794,7 +827,7 @@ function M.open(source_bufnr, config)
     return nil
   end
 
-  local switched, switch_err = pcall(vim.api.nvim_win_set_buf, winid, reader_bufnr)
+  local switched, switch_err = set_win_buf_keepjumps(winid, reader_bufnr)
   if not switched then
     release_source(states[reader_bufnr], reader_bufnr)
     states[reader_bufnr] = nil
@@ -818,7 +851,7 @@ function M.open(source_bufnr, config)
       and vim.api.nvim_win_get_buf(winid) == reader_bufnr
       and vim.api.nvim_buf_is_valid(source_bufnr)
     then
-      pcall(vim.api.nvim_win_set_buf, winid, source_bufnr)
+      set_win_buf_keepjumps(winid, source_bufnr)
     end
     restore_window(state)
     states[reader_bufnr] = nil
@@ -867,7 +900,7 @@ function M.close(reader_bufnr, opts)
   vim.bo[reader_bufnr].modified = false
   state.closing = true
   M.clear_visual_selection(reader_bufnr)
-  local switched, switch_err = pcall(vim.api.nvim_win_set_buf, winid, state.source_bufnr)
+  local switched, switch_err = set_win_buf_keepjumps(winid, state.source_bufnr)
   if not switched then
     state.closing = false
     vim.bo[reader_bufnr].modified = vim.bo[state.source_bufnr].modified

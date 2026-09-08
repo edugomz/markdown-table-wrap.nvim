@@ -1,5 +1,41 @@
 local h = require("tests.helpers")
 
+h.test("Reader open/close does not pollute the jumplist", function()
+  local plugin = require("markdown-table-wrap")
+  local reader = require("markdown-table-wrap.reader")
+  plugin.setup({ auto_preview = false, preview_mode = "reader" })
+
+  h.with_buffer({
+    "| Name | Value |",
+    "| --- | --- |",
+    "| one | two |",
+  }, function(source_bufnr)
+    vim.bo[source_bufnr].filetype = "markdown"
+
+    local before = #vim.fn.getjumplist()[1]
+
+    local reader_bufnr = plugin.reader_preview()
+    h.assert_true("Reader opened", reader.is_reader(reader_bufnr))
+    h.assert_eq("opening Reader does not add a jump", #vim.fn.getjumplist()[1], before)
+
+    h.assert_true("edit() switches back to source", reader.edit(reader_bufnr, nil, true))
+    h.assert_eq("switching to source via edit() does not add a jump", #vim.fn.getjumplist()[1], before)
+
+    reader_bufnr = plugin.reader_preview()
+    h.assert_true("Reader reopened", reader.is_reader(reader_bufnr))
+    h.assert_true("Reader closes", plugin.close_reader())
+    h.assert_eq("closing Reader does not add a jump", #vim.fn.getjumplist()[1], before)
+
+    -- Sanity check: the fix must not swallow real navigation, only the
+    -- plugin's own bookkeeping swaps. <C-o> has to keep working for jumps
+    -- the user actually made.
+    vim.cmd("normal! G")
+    h.assert_true("a genuine jump motion still registers", #vim.fn.getjumplist()[1] > before)
+
+    plugin.state.paused_buffers[source_bufnr] = nil
+  end)
+end)
+
 h.test("optional Reader sticky header is window-local and source-safe", function()
   local plugin = require("markdown-table-wrap")
   local reader = require("markdown-table-wrap.reader")
