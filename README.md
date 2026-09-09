@@ -98,10 +98,13 @@ In Reader:
 
 - `q` returns to Source and pauses automatic reopening for that buffer.
 - `e`, `i`, `a`, `I`, `A`, `o`, and `O` return to the mapped Source position for
-  editing. Reader normally reopens after `InsertLeave`.
+  editing. Insert keys reopen Reader after `InsertLeave` when auto-preview is
+  enabled and no newer explicit pause/disable has cancelled the handoff.
+- `u` / `<C-r>` undo/redo in Source, honoring its mappings and automatic view policy.
 - `:MarkdownTableToggleInline` returns to Source and enables Inline.
 - `:w`, `:wq`, `:x`, and `ZZ` save the backing Source; the Reader is never
-  written as a document.
+  written as a document by these commands. File arguments, bang, ranges, and
+  `:saveas` are Source-aware too; see Vim help for session and shell-filter limits.
 - Native `v`, `V`, and `<C-v>` select real rendered text. Follow with `y` to
   copy the visible Unicode table.
 

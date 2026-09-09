@@ -64,6 +64,7 @@ text or user intent.
 | `render.lua` | Allocates column widths and produces rendered line objects, borders, semantic chunks, cell segments, and refreshable Float views |
 | `inline.lua` | Owns Source-buffer extmarks, inline replace/insert presentation, window wrap restoration, and optional viewport offsets |
 | `reader.lua` | Builds full-document Reader buffers, maps Reader lines/cells to Source, protects rendered tables from secondary Markdown parsing, and owns Reader lifecycle |
+| `reader_io.lua` | Forwards Reader file-write arguments/ranges to Source and protects/resolves session-restored Reader URIs |
 | `cell_ops.lua` | Resolves the logical Reader cell, performs exact Source-span yank/mutation operations, enters Source Insert for changes, and installs configurable cell mappings/fallbacks |
 | `export.lua` | Resolves Source-backed cell/table identity, copies semantic rendered values, refuses ambiguous excess-cell tables, and serializes selected tables as TSV/CSV without Source mutation |
 | `table_edit.lua` | Performs explicit, validated Source table rewrites (format, row/column structure, alignment) and isolated one-cell popup edits; never participates in automatic rendering |
@@ -305,6 +306,12 @@ snapshot. Buffer-navigation actions use the same temporary-leave contract;
 explicit close/edit still clears the snapshot and pauses Source. Inline saves
 and restores its native window view around detach/attach and option changes.
 
+Insert keys use a cancellable, temporary Source pause. The native key is placed
+at the front of typeahead after the Source transition; InsertLeave releases only
+that pause and respects automatic-preview policy. Explicit pause/disable,
+repeated setup, and Source cleanup cancel its callback. Reader undo/redo leave
+the disposable view and replay the counted key against Source's own mappings.
+
 ## Lifecycle And Scheduling
 
 `setup()` asks `config.lua` for a validated configuration, clears derived
@@ -326,12 +333,18 @@ exit without touching state, and unexpected callback failures are reported
 without escaping the scheduled boundary. Text changes refresh visible dependent
 Readers or recompute Inline. Resize events fan out to every affected visible
 Reader and schedule each distinct visible Source/Inline buffer once, instead of
-depending on whichever window happened to be current. Buffer wipe releases
+depending on whichever window happened to be current. Committed deletion releases
 Reader/Inline state, caches, discovery status, mappings, pause state, viewport
 state, and scheduled tokens. Window close restores Inline-owned options. Float
 ownership is cleared before closing/deleting its disposable window and buffer,
 so external window closes and Source/Float wipeout cannot leave stale buffer
 identities behind.
+
+`BufUnload` followed by delete/wipe commits a Source deletion, even if the same
+buffer number is immediately reloaded. Ownership is invalidated synchronously;
+dependent Reader window replacement is deferred until buffer managers finish,
+preserving split windows. An unload without deletion is checked after the
+operation so Source reload/rename and cancelled closes retain their identity.
 
 Reader open snapshots Source cursor/window options, builds the complete derived
 document, prepares a scratch buffer, and sets Source `bufhidden` to `hide` while
@@ -345,6 +358,15 @@ lines/overlay and always protects the Reader as non-modifiable. Explicit close
 maps the Reader cursor back to Source, restores options and ownership, and
 deletes the scratch buffer. `:write` in Reader delegates to the Source through
 `BufWriteCmd`; the Reader never owns edits.
+
+Reader file saves forward native file targets, bang, `++` arguments, save-as,
+and mapped physical Source ranges. Session URIs encode a Source path rather
+than relying on process-local buffer IDs; named restored placeholders resolve
+to real Source, while legacy/unnamed or modified placeholders remain protected.
+Only loaded placeholders are scanned: unloaded alternate names left by rename
+must not resurrect an old Source. Native `:write !cmd` bypasses BufWriteCmd
+under Neovim's default shell path and streams rendered text; users must enter
+Source first for raw-Markdown shell operations. We do not change `shelltemp`.
 
 Cell changes are the exception to the general “Reader is protected” rule only
 in terms of their entry point: the Reader remains non-modifiable, while

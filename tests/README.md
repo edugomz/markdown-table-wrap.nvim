@@ -12,6 +12,33 @@ nvim --headless -u NONE --cmd "set shadafile=NONE" --cmd "set noswapfile" \
 The suite is organized by responsibility instead of the order in which features
 were added:
 
+`reader_io_spec.lua` also generates a real session and restores it in a fresh
+Neovim process. `reader_edges_spec.lua` sends real typed input to a child event
+loop, including fast insert sequences, pause/setup/disable cancellation, and
+Source-mapped undo. This avoids feedkeys-only tests accidentally hiding input
+races by implicitly exiting Insert.
+
+Optional UI/input integration (requires Python and `pynvim`; neither is a plugin
+runtime dependency):
+
+```sh
+uv run --with pynvim python tests/ui_smoke.py
+uv run --with pynvim python tests/ui_smoke.py --lazyvim
+uv run --with pynvim python tests/ui_grid.py
+```
+
+`--lazyvim` loads the installed personal configuration in a separate Neovim,
+forces this checkout's modules, suppresses update/install checks, and uses a
+dummy clipboard. It does not modify the configuration or the running editor.
+It exercises the actual Bufferline close callback/installed Snacks implementation
+with two Readers, a cancelled dirty close, writes, and deletion. Only run it
+where that integration is installed. The Cancel response is simulated; the
+callback and deletion path are real. Both modes use actual UI-attached typed
+register/count/cic/undo/redo/dot and Reader/Float/navigation sequences.
+`ui_grid.py` verifies actual Neovim grid cells/highlight attributes for CJK,
+combining marks, normalized tabs, block/character selection, and horizontal
+scrolling. It does not substitute for platform font/compositor checks.
+
 | Area | Specs | Main regression risks covered |
 | --- | --- | --- |
 | GFM parsing | `parser_spec.lua` | delimiter validation, escaped/optional outer pipes, GFM missing-cell rows, shared UTF-8/pipe/fence semantics, blockquote Source spans, fenced and block boundaries, linear large-document scanning |

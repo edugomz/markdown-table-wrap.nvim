@@ -77,7 +77,12 @@ Default interaction:
   overlay so selections remain obvious on rendered table cells; the overlay
   does not change what native Visual mode selects.
 - i/a/I/A/o/O switch to the corresponding source line for editing. Reader
-  reopens after InsertLeave.
+  reopens after InsertLeave only when auto-preview is enabled and no newer
+  explicit pause/disable has cancelled the handoff. Fast typed text is kept
+  behind the native insert key, including with debounce_ms=0.
+- u/CTRL-R leave Reader to undo/redo in Source, honoring Source mappings and
+  counts. Normal automatic preview policy applies afterwards. Configure or
+  disable these keys with mappings.reader.undo / mappings.reader.redo.
 - :w, :wq, :x, and ZZ save the backing Markdown source directly. The rendered
   Reader buffer is never written to disk; :wq then quits as usual.
 - |:MarkdownTableToggleReader| switches between Reader and Source.
@@ -89,6 +94,25 @@ Default interaction:
   returning to an auto-preview Source restores Reader. Explicit close/edit or
   disable actions keep their persistent pause semantics.
   see |markdown-table-wrap-map-gx|.
+
+FILE WRITES AND SESSIONS
+
+Reader file writes forward :write {path}, !, ++ options, :saveas, and append
+to the canonical Source. A rendered line range maps to its complete physical
+Source lines (a wrapped cell fragment therefore writes its Source row). Stale
+ranges are refused until refresh. Source write hooks and readonly checks apply.
+An unnamed Source needs :write {path}. :saveas renames Source, not the Reader.
+
+Saved session Reader URIs carry an encoded Source path. Loading a session
+resolves named Readers back to Source; normal auto-preview policy may reopen
+Reader afterwards. Legacy/unnamed URIs remain protected placeholders with a
+warning. Modified placeholders are kept for recovery, never silently discarded.
+Sessions do not save unsaved document text; save Source before closing Neovim.
+
+Native shell operations are different: :write !{cmd} sends the current rendered
+buffer to the shell and cannot reliably be intercepted by BufWriteCmd. Use q
+or :MarkdownTableEditSource first when a filter needs raw Markdown. No global
+'shelltemp' option is changed. Native Visual yanks likewise copy rendered text.
 
 CELL OPERATIONS                              *markdown-table-wrap-cell-operations*
 
@@ -390,6 +414,7 @@ COMMANDS                                      *markdown-table-wrap-commands*
     Replace the current Reader cell with the unnamed register. Register
     newlines become spaces. Use a mapping to
     <Plug>(MarkdownTableWrapPutCell) when a selected register is required.
+    Unescaped structural pipes are refused; use \| or a matched code span.
 
                                                     *:MarkdownTableYankTable*
 :MarkdownTableYankTable
@@ -401,6 +426,9 @@ COMMANDS                                      *markdown-table-wrap-commands*
     Copy the current table as TSV (the default) or CSV. Add ! to export every
     table in the Source buffer. TSV uses C-style escapes for tabs/newlines;
     CSV doubles embedded quotes and quotes fields containing delimiters.
+    CSV is formula-safe by default: values beginning with =, +, -, @, tab or
+    carriage return get an apostrophe prefix. The Lua export API accepts
+    csv_formula_policy="raw" to opt out explicitly; TSV is unchanged.
     Tables with excess Source cells are refused before registers are changed.
     Successful exports use the same register/clipboard policy as rendered copy.
 
@@ -409,6 +437,7 @@ COMMANDS                                      *markdown-table-wrap-commands*
     Canonicalize the current table in the Source buffer. Rendering never runs
     this formatter implicitly. Padding is calculated from the raw Markdown
     Source text, so the rewritten pipe columns remain aligned in Source.
+    Each existing row retains its exact quote prefix and indentation.
 
                                                       *:MarkdownTableAddRow*
 :MarkdownTableAddRow
@@ -462,6 +491,8 @@ refuse malformed tables with excess cells and make no partial rewrite; missing
 or multi-line cell ranges are also rejected by the popup. The popup uses the
 isolated markdown-table-wrap-cell filetype and is excluded from automatic
 preview discovery.
+Popup cell commits also refuse unescaped structural pipes. Cell and structural
+mutations revalidate Source after view transitions before replacing any bytes.
 
 ==============================================================================
 CONFIGURATION                              *markdown-table-wrap-configuration*
@@ -534,6 +565,8 @@ Default setup:
         enabled = true,
         close = "q",
         edit = "e",
+        undo = "u",
+        redo = "<C-r>",
         open_link = "gx",
         help = false,
         insert = { "i", "a", "I", "A", "o", "O" },
@@ -584,6 +617,8 @@ max_col_width~
 fit_to_window~
     Prioritize keeping the complete table inside the current window text area.
     When necessary, columns may become narrower than min_col_width.
+    No column is narrowed below its widest glyph. An impossible narrow layout
+    intentionally overflows rather than splitting a wide glyph or its border.
 
 preview_mode~
     "reader" (default), "inline", or "float".
@@ -636,6 +671,12 @@ clear_on_visual~
     after leaving Visual mode. Reader mode selects real rendered lines and
     stays active after yank.
 
+clear_on_insert~
+    Defaults to true: clear replace-mode Inline on InsertEnter. False retains
+    the projection with Source still concealed during Insert. When
+    auto_preview_in_insert=false, it stays stable until InsertLeave; true opts
+    into live updates while typing.
+
 auto_preview~
     Automatically render supported buffers. In Reader mode, automatic opening
     also follows reader.auto_open.
@@ -658,6 +699,8 @@ cache~
 
 Wrapping prefers whitespace and common Latin/CJK punctuation boundaries,
 including Chinese `、，。！？；：`, without splitting multibyte characters.
+Rendered tabs become single spaces so real Reader lines and virtual-text
+columns agree; raw Source and structured export retain their original values.
 
 highlight_preset~                  *markdown-table-wrap-highlight-preset*
     "default", "tokyonight", "catppuccin", "render_markdown", "auto", or a
@@ -669,6 +712,9 @@ theme_dir~                              *markdown-table-wrap-theme-dir*
     Optional directory containing custom theme files named <preset>.lua.
     Matching files are executed with dofile(); configure only a directory of
     trusted Lua code.
+    Preset names must be single components (Unicode is allowed). Separators,
+    traversal names, and files resolving through symlinks outside this
+    directory are refused.
 
 themes~                                    *markdown-table-wrap-themes*
     Inline custom theme table keyed by |markdown-table-wrap-highlight-preset|.
@@ -712,6 +758,8 @@ link~                                      *markdown-table-wrap-link*
     "tab" to select built-in file opening.
     Standard Markdown links use [text](url). The plugin also accepts
     (text)[url] as a convenience form inside table cells.
+    Raw and percent-decoded control bytes are refused in local paths.
+    file://./relative.md is Source-relative; localhost is case-insensitive.
 
 mappings~                              *markdown-table-wrap-mappings*
     Configure or disable Reader and Float buffer-local mappings. Set
@@ -798,6 +846,7 @@ get_buffer_config({bufnr})~      *markdown-table-wrap.get_buffer_config()*
     Return a deep-copied effective configuration for {bufnr}, including
     runtime view, auto-preview, and inline-viewport overrides. Omit {bufnr} or
     pass 0 for the current buffer.
+    Reader/Float buffer numbers resolve to their canonical Source overrides.
 
 get_preview_mode({bufnr})~          *markdown-table-wrap.get_preview_mode()*
     Return the effective "reader", "inline", or "float" mode for {bufnr}
@@ -808,6 +857,8 @@ get_state({bufnr})~                        *markdown-table-wrap.get_state()*
     Return a copied active context with mode, canonical Source, view/window,
     mapped cursor, table/cell, cache, and effective configuration. Return nil
     plus an error when the requested view is invalid.
+    An unexpected parser exception is retained as parse_error and shown by
+    Inspect, distinct from an ordinary cursor outside a table.
 
 parser.parse_lines({lines}, {opts})~
     Pure line-array API returning Source-spanned table, delimiter, row, cell,

@@ -9,9 +9,11 @@ rename its development branch as part of a release.
 - Repository: `ice345/markdown-table-wrap.nvim`
 - Remote: `origin` (`git@github.com:ice345/markdown-table-wrap.nvim.git`)
 - Development/release branch: `master`
-- Latest published tag: `v0.6.0`
-- Current local release candidate: `v0.7.0`; it is not published until the
-  maintainer explicitly approves the final diff and release gates.
+- Latest published tag: `v0.8.0`. Its annotated tag and GitHub Release were
+  verified after publishing; the release record appears below.
+- Previous published tag: `v0.7.0` at
+  `281069c1107a510028fab5f5b0a74a226ed2036d`.
+- `v0.8.0` consolidates the former v0.7.1/v0.7.2 maintenance scope.
 - Supported Neovim baseline: 0.10+
 
 Verify these values rather than assuming the local checkout is current:
@@ -25,7 +27,7 @@ git tag --sort=-version:refname | head
 ```
 
 The v0.4.0 section below is the retained release record and checklist example;
-the same gates apply to v0.7.0 and later releases. Substitute the target
+the same gates apply to v0.8.0 and later releases. Substitute the target
 version and milestone scope from the maintainer-local `ROADMAP.md`. Release
 only from `master`, with no unrelated local changes, after the branch is up to
 date with `origin/master`.
@@ -427,6 +429,94 @@ Verification:
   materialized: approximately 1.44 s cold open, 0.307 s refresh, 42 ms for 500
   `gg`/`G` pairs, and 2.1 ms for 500 indexed local-cell reads on the
   development machine.
+
+## v0.7.0 Release Notes
+
+### markdown-table-wrap.nvim v0.7.0
+
+v0.7.0 unifies derived-view lifecycle around canonical Source identity and
+adds source-safe blockquote table support without changing the plugin's core
+non-destructive rendering contract.
+
+Highlights:
+
+- Source, Inline, Reader, and Float commands resolve through one canonical
+  Source identity. Reader-to-Float transitions survive refresh debounce, and
+  closing Float restores the originating Source/Reader/Inline view, logical
+  cell, cursor, and viewport when still valid.
+- Temporary next/previous/alternate/selected-buffer navigation no longer
+  permanently pauses automatic Reader mode. Default navigation keys remain
+  conservative, with `H`/`L` passthrough opt-in.
+- Top-level and nested blockquote tables render with visible quote depth and
+  exact Source spans. Reader cell edits and explicit formatting preserve the
+  container; unsupported list-contained tables remain untouched.
+- Compact GFM delimiter cells are accepted, and rejected table-like
+  candidates no longer hide a later valid table in the same discovery range.
+- Reader and standalone Float link opening share the external-scheme
+  allowlist. Home-relative paths avoid expression-expanding path logic,
+  scrolling uses resolved termcodes, and externally closed Float state is
+  cleaned up.
+- Hot paths reuse read-only cached models, skip unchanged theme work, and
+  avoid rebuilds for plain scrolling while public model boundaries continue
+  to return isolated values.
+- README, Vim help, architecture, performance guidance, types, health,
+  contributor guidance, CI, changelog, and license metadata were aligned with
+  the released behavior.
+
+Verification:
+
+- 249 headless tests passed on Neovim 0.10.4 and stable 0.12.5.
+- The real LazyVim multi-buffer matrix passed 28/28 assertions, and the Reader
+  `:w`, `:wq`, `:x`, and `ZZ` matrix passed 15/15 assertions.
+- Parser and large-Reader reference benchmarks stayed within their documented
+  budgets.
+- GitHub Actions passed both supported Neovim jobs for the `master` release
+  commit and again for the annotated `v0.7.0` tag.
+
+Release: <https://github.com/ice345/markdown-table-wrap.nvim/releases/tag/v0.7.0>
+
+## v0.8.0 Release Notes
+
+### markdown-table-wrap.nvim v0.8.0
+
+v0.8.0 is a broad correctness and lifecycle release. It keeps Source as the
+only canonical document while making disposable Reader views safer across
+external buffer deletion, native writes, session restoration, rapid editing,
+Unicode geometry, and malformed Markdown.
+
+Highlights:
+
+- Deleting a Reader-backed Source through native commands or
+  Snacks/Bufferline now disposes every dependent Reader without leaving blank
+  zombie views, losing unrelated buffers, or turning temporary navigation into
+  an explicit pause.
+- Reader file saves, ranges, append, bang, `++` arguments, save-as, rename, and
+  session restoration resolve through Source. Modified restoration placeholders
+  remain protected for recovery instead of becoming editable shadow documents.
+- Reader insert handoff, `cic`, Source-backed undo/redo/repeat, registers,
+  mutation validation, and unsafe structural-pipe refusal are hardened against
+  stale state and fast input.
+- Pipe/code-span parsing, quoted fences, conservative list containment,
+  Tree-sitter fallback, nested inline spans, paths, theme presets, CSV export,
+  and failure diagnostics have explicit tested boundaries.
+- Window text-area measurement, wide and combining characters, trailing spaces,
+  tabs, Visual overlays, conceal/virtual text, and refresh signatures now share
+  display-width-aware behavior.
+
+Verification:
+
+- 298 headless tests pass on Neovim 0.10.4 and stable 0.12.5.
+- The personal LazyVim integration passes 60 real-input checks using the actual
+  Bufferline/Snacks close callback; the clean-Neovim matrix passes 59 checks.
+- Eight UI-grid selection cases pass on both supported test runtimes, covering
+  CJK, combining marks, tabs, character/block selection, and horizontal scroll.
+- Parser benchmarks remain within the documented reference budgets.
+
+Known boundary:
+
+- Native `:write !cmd` and filters stream the rendered current buffer because
+  Neovim bypasses file-write hooks for that shell path. Enter Source first when
+  raw Markdown must be sent to a command.
 
 ## Future Releases
 

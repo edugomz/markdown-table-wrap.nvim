@@ -2,6 +2,50 @@
 
 All notable changes to `markdown-table-wrap.nvim` are documented here.
 
+## 0.8.0 - Source-Safe Maintenance And Lifecycle Hardening
+
+Released 2026-09-09.
+
+### Fixed
+
+- Dispose dependent Readers on Source deletion through native commands or
+  Snacks/Bufferline, preserve split windows, and distinguish cancellation,
+  rename/reload, and immediate reopening from an old Reader generation.
+- Forward Reader file-write targets, bang, ranges, append, `++` options, and
+  save-as to Source; restore named session Readers to Source without editable
+  phantom buffers or resurrection of unloaded alternate names.
+- Preserve PR #7's internal `keepjumps` transitions and harden its insert-key
+  handoff against fast typeahead, repeated setup, disable, and pre-existing
+  pause policy. Reader `u` / `<C-r>` now use Source history and mappings.
+- Revalidate exact cell/table identity immediately before mutations; reject
+  ambiguous structural pipes in put/popup values and preserve each formatted
+  row's original quote prefix.
+- Keep Visual highlights at actual rendered columns, handle multibyte and
+  blockwise ranges, and retain a coherent concealed Inline projection when
+  `clear_on_insert=false`.
+  Keep composing marks with their selected base glyph and normalize rendered
+  tabs to single spaces without changing raw Source/export values.
+- Include text-area geometry and link policy in refresh signatures, resolve
+  Reader/Float config queries to Source, avoid unrelated buffer state, and
+  protect explicit Floats from unrelated automatic refreshes.
+- Harden matched backtick scanning, nested quoted fences, nested emphasis,
+  Unicode underscore boundaries, conservative list-continuation rejection,
+  and incomplete/zero-height Tree-sitter results with Lua supplementation.
+- Preserve wide-glyph width floors, account for quote prefixes and trailing
+  whitespace when fitting/wrapping, and use consistent exclusive Source spans.
+- Reject local-link control bytes and escaping theme paths; support relative
+  `file://./` URIs, case-insensitive localhost, and Windows line suffixes.
+- Preserve default `replace_keycodes` semantics, expose parser exceptions in
+  Inspect, and never redispatch a failed User event without its payload.
+
+### Changed
+
+- CSV export neutralizes formula-leading fields by default. Lua callers may
+  explicitly choose `csv_formula_policy="raw"`; TSV remains unchanged.
+- Native `:write !cmd` streams rendered Reader text (a Neovim filter boundary,
+  not a Source file save). Enter Source first for raw-Markdown shell operations.
+- Default automatic Reader, guarded cell prefixes, and opt-in H/L remain.
+
 ## 0.7.0 - Cross-View Reliability And Blockquote Tables
 
 ### Added
