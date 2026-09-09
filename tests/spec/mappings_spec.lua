@@ -44,6 +44,49 @@ h.test("mapping invocation supports callbacks strings expressions and remaps", f
   end)
 end)
 
+h.test("expression mapping replace_keycodes is opt-in for nil false and zero", function()
+  local mappings = require("markdown-table-wrap.mappings")
+  local original_replace_termcodes = vim.api.nvim_replace_termcodes
+  local original_feedkeys = vim.api.nvim_feedkeys
+  local replaced = {}
+  local fed = {}
+  vim.api.nvim_replace_termcodes = function(keys)
+    table.insert(replaced, keys)
+    return "<converted>"
+  end
+  vim.api.nvim_feedkeys = function(keys)
+    table.insert(fed, keys)
+  end
+
+  for _, case in ipairs({
+    { name = "nil", value = nil },
+    { name = "false", value = false },
+    { name = "zero", value = 0 },
+    { name = "true", value = true },
+    { name = "one", value = 1 },
+  }) do
+    h.assert_true(
+      "expression mapping invokes for replace_keycodes=" .. case.name,
+      mappings.invoke({
+        callback = function()
+          return "<Right>"
+        end,
+        expr = 1,
+        replace_keycodes = case.value,
+      })
+    )
+  end
+
+  vim.api.nvim_replace_termcodes = original_replace_termcodes
+  vim.api.nvim_feedkeys = original_feedkeys
+  h.assert_deep_eq("only true and one resolve terminal keycodes", replaced, { "<Right>", "<Right>" })
+  h.assert_deep_eq(
+    "unresolved expression results stay literal",
+    fed,
+    { "<Right>", "<Right>", "<Right>", "<converted>", "<converted>" }
+  )
+end)
+
 h.test("mapping restoration preserves expression semantics and replace_keycodes", function()
   local mappings = require("markdown-table-wrap.mappings")
   local expr_calls = 0

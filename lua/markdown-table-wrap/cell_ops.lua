@@ -324,7 +324,30 @@ local function normalize_single_line(value)
   return value
 end
 
-local function validate_source(cell, expected_changedtick, read_only_ok)
+local function same_span(left, right)
+  return left
+    and right
+    and left.start_lnum == right.start_lnum
+    and left.start_col == right.start_col
+    and left.end_lnum == right.end_lnum
+    and left.end_col == right.end_col
+end
+
+local function source_cell_matches(cell)
+  if not cell.table_id or cell.row_index == nil or cell.column_index == nil then
+    return false
+  end
+  for _, table_info in ipairs(require("markdown-table-wrap.parser").parse_all(cell.source_bufnr, { cache = false })) do
+    if table_info.id == cell.table_id then
+      local row = cell.row_index == 0 and table_info.header or table_info.rows[cell.row_index]
+      local current = row and row[cell.column_index] or nil
+      return current ~= nil and same_span(current.source_span, cell.source_span)
+    end
+  end
+  return false
+end
+
+local function validate_source(cell, expected_changedtick, read_only_ok, require_identity)
   local source_bufnr = cell.source_bufnr
   local span = cell.source_span
   if not vim.api.nvim_buf_is_valid(source_bufnr) then
@@ -343,7 +366,10 @@ local function validate_source(cell, expected_changedtick, read_only_ok)
     return false, "multi-line Source cells are not supported"
   end
   if expected_changedtick and vim.api.nvim_buf_get_changedtick(source_bufnr) ~= expected_changedtick then
-    return false, "the backing Source changed while leaving Reader"
+    return false, "the backing Source changed before the cell mutation"
+  end
+  if require_identity and not source_cell_matches(cell) then
+    return false, "the current cell no longer matches the original Markdown table"
   end
 
   return true
@@ -396,7 +422,9 @@ local function native_source_operator(cell, operator, register)
     return false, "register " .. vim.inspect(register) .. " cannot receive cell text"
   end
 
-  local valid, validation_error = validate_source(cell, nil, operator == "y")
+  local expected_changedtick = vim.api.nvim_buf_get_changedtick(cell.source_bufnr)
+  local require_identity = operator ~= "y"
+  local valid, validation_error = validate_source(cell, expected_changedtick, operator == "y", require_identity)
   if not valid then
     return false, validation_error
   end
@@ -406,7 +434,24 @@ local function native_source_operator(cell, operator, register)
 
   cancel_pending_operator()
   local ok, err = pcall(vim.api.nvim_buf_call, cell.source_bufnr, function()
-    select_source_span(cell)
+    -- Check changedtick and table/cell identity in Source immediately before
+    -- selecting the original span for a native destructive operator.
+    valid, validation_error = validate_source(cell, expected_changedtick, operator == "y", require_identity)
+    if not valid then
+      error(validation_error, 0)
+    end
+    local selected = select_source_span(cell)
+    -- Selecting a non-empty span enters Visual mode and can run user
+    -- ModeChanged autocmds.  They may edit Source after the first check, so
+    -- make the destructive native operator the next action only if the
+    -- original table cell is still present at its exact span.
+    if selected then
+      valid, validation_error = validate_source(cell, expected_changedtick, operator == "y", require_identity)
+      if not valid then
+        exit_visual_mode()
+        error(validation_error, 0)
+      end
+    end
     vim.cmd("normal! " .. register_prefix(register) .. operator)
   end)
   if not ok then
@@ -496,7 +541,8 @@ local function prepare_change_repeat(cell, register)
 end
 
 local function replace_cell(cell, value, delete_register)
-  local valid, validation_error = validate_source(cell)
+  local expected_changedtick = vim.api.nvim_buf_get_changedtick(cell.source_bufnr)
+  local valid, validation_error = validate_source(cell, expected_changedtick, false, true)
   if not valid then
     return false, validation_error
   end
@@ -505,9 +551,23 @@ local function replace_cell(cell, value, delete_register)
   end
 
   value = normalize_single_line(value)
+  if require("markdown-table-wrap.pipes").has(value) then
+    return false, "cell content contains a structural pipe; escape it as \\| or use a matched code span"
+  end
   cancel_pending_operator()
   local ok, err = pcall(vim.api.nvim_buf_call, cell.source_bufnr, function()
+    valid, validation_error = validate_source(cell, expected_changedtick, false, true)
+    if not valid then
+      error(validation_error, 0)
+    end
     local selected = select_source_span(cell)
+    if selected then
+      valid, validation_error = validate_source(cell, expected_changedtick, false, true)
+      if not valid then
+        exit_visual_mode()
+        error(validation_error, 0)
+      end
+    end
     if selected then
       vim.cmd("normal! " .. register_prefix(delete_register) .. "d")
     end
@@ -612,13 +672,13 @@ function M.change(reader_bufnr, opts)
     return false
   end
 
-  local valid, validation_error = validate_source(cell)
+  local source_changedtick = vim.api.nvim_buf_get_changedtick(cell.source_bufnr)
+  local valid, validation_error = validate_source(cell, source_changedtick, false, true)
   if not valid then
     notify("could not change cell: " .. tostring(validation_error), vim.log.levels.ERROR)
     return false
   end
 
-  local source_changedtick = vim.api.nvim_buf_get_changedtick(cell.source_bufnr)
   cancel_pending_operator()
 
   -- Cell change is a short Source editing hop, like Reader's i/a/o mappings;
@@ -631,7 +691,7 @@ function M.change(reader_bufnr, opts)
     return false
   end
 
-  valid, validation_error = validate_source(cell, source_changedtick)
+  valid, validation_error = validate_source(cell, source_changedtick, false, true)
   if not valid then
     notify("could not change cell: " .. tostring(validation_error), vim.log.levels.ERROR)
     return false

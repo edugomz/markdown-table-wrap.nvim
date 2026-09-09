@@ -12,7 +12,7 @@ local function feed_result(result, mapping)
     return true
   end
 
-  if mapping.replace_keycodes ~= 0 then
+  if mapping.replace_keycodes == true or mapping.replace_keycodes == 1 then
     result = vim.api.nvim_replace_termcodes(result, true, false, true)
   end
   vim.api.nvim_feedkeys(result, mapping.noremap == 1 and "n" or "m", false)

@@ -21,6 +21,107 @@ local function delete_buffer(buf)
   end
 end
 
+h.test("unsupported and auxiliary buffers never acquire per-Source configuration or timers", function()
+  local plugin = require("markdown-table-wrap")
+  plugin.setup({ auto_preview = true })
+  for _, auxiliary in ipairs({ false, true }) do
+    h.with_buffer(table_lines, function(buf)
+      vim.bo[buf].filetype = auxiliary and "markdown" or "lua"
+      vim.b[buf].markdown_table_wrap_auxiliary = auxiliary
+      plugin.get_buffer_config(buf)
+      plugin.refresh_auto({ bufnr = buf, force = true })
+      plugin.schedule_refresh({ bufnr = buf, force = true })
+      vim.api.nvim_exec_autocmds("InsertEnter", { buffer = buf })
+      vim.api.nvim_exec_autocmds("BufLeave", { buffer = buf })
+      h.assert_eq("no auxiliary configuration", plugin.state.buffer_configs[buf], nil)
+      h.assert_eq("no auxiliary timer", plugin.state.refresh_tokens[buf], nil)
+      h.assert_eq("no auxiliary pause", plugin.state.paused_buffers[buf], nil)
+    end)
+  end
+end)
+
+h.test("public configuration queries from Reader and Float use Source overrides", function()
+  local plugin = require("markdown-table-wrap")
+  plugin.setup({ auto_preview = false, preview_mode = "reader" })
+  h.with_buffer(table_lines, function(source)
+    vim.bo[source].filetype = "markdown"
+    plugin.state.buffer_modes[source] = "inline"
+    plugin.state.auto_buffers[source] = true
+    local view = plugin.reader_preview({ auto = true })
+    h.assert_eq("Reader queries Source mode", plugin.get_preview_mode(view), "inline")
+    h.assert_true("Reader queries Source auto policy", plugin.get_buffer_config(view).auto_preview)
+    h.assert_eq("Reader not memoized separately", plugin.state.buffer_configs[view], nil)
+    plugin.float_preview()
+    h.assert_eq("Float queries Source mode", plugin.get_preview_mode(plugin.state.buf), "inline")
+    h.assert_true("Float queries Source auto policy", plugin.get_buffer_config(plugin.state.buf).auto_preview)
+    h.assert_eq("Float not memoized separately", plugin.state.buffer_configs[plugin.state.buf], nil)
+    plugin.close_preview({ restore_origin = false })
+  end)
+end)
+
+h.test("closing an inactive Source preview preserves its automatic reopen policy", function()
+  local plugin = require("markdown-table-wrap")
+  plugin.setup({ auto_preview = true })
+  h.with_buffer(table_lines, function(buf)
+    vim.bo[buf].filetype = "markdown"
+    h.assert_false("no preview to close", plugin.close_preview())
+    h.assert_eq("Source remains unpaused", plugin.state.paused_buffers[buf], nil)
+  end)
+end)
+
+h.test("unrelated automatic refresh cannot replace an explicit Float", function()
+  local plugin = require("markdown-table-wrap")
+  plugin.setup({ auto_preview = false, preview_mode = "inline" })
+  local win = vim.api.nvim_get_current_win()
+  h.with_buffer(table_lines, function(source)
+    vim.bo[source].filetype = "markdown"
+    plugin.float_preview()
+    local float = plugin.state.win
+    local other = new_markdown_buffer(table_lines)
+    vim.api.nvim_set_current_win(win)
+    vim.api.nvim_win_set_buf(win, other)
+    plugin.refresh_auto({ force = true })
+    h.assert_eq("Float ownership unchanged", plugin.state.float_source_bufnr, source)
+    h.assert_true("explicit Float survives", vim.api.nvim_win_is_valid(float))
+    plugin.close_preview({ restore_origin = false })
+    delete_buffer(other)
+  end)
+end)
+
+h.test("Inline skip signatures include gutters and reference definitions outside a table", function()
+  local plugin = require("markdown-table-wrap")
+  local render = require("markdown-table-wrap.render")
+  plugin.setup({ auto_preview = true, preview_mode = "inline", render_all = false })
+  h.with_buffer({ "| A | B |", "| - | - |", "| [label][ref] | two |", "", "[ref]: https://one.example" }, function(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_win_set_cursor(0, { 3, 2 })
+    plugin.refresh_auto()
+    local first = plugin.state.last_signature[buf]
+    local original_width = render.text_area_width
+    render.text_area_width = function()
+      return 25
+    end
+    local ok, err = pcall(plugin.refresh_auto)
+    render.text_area_width = original_width
+    if not ok then
+      error(err)
+    end
+    local narrow = plugin.state.last_signature[buf]
+    h.assert_true("gutter width changes skip signature", first ~= narrow)
+    vim.api.nvim_buf_set_lines(buf, 4, 5, false, { "[ref]: https://two.example" })
+    plugin.refresh_auto()
+    h.assert_true("outside definition invalidates projection", narrow ~= plugin.state.last_signature[buf])
+    local schedules = 0
+    local original_schedule = plugin.schedule_refresh
+    plugin.schedule_refresh = function()
+      schedules = schedules + 1
+    end
+    vim.api.nvim_exec_autocmds("OptionSet", { pattern = "signcolumn" })
+    plugin.schedule_refresh = original_schedule
+    h.assert_eq("gutter changes schedule refresh", schedules, 1)
+  end)
+end)
+
 h.test("window scrolling does not schedule a table rebuild", function()
   local plugin = require("markdown-table-wrap")
   plugin.setup({ auto_preview = false, preview_mode = "inline" })
@@ -43,6 +144,25 @@ h.test("window scrolling does not schedule a table rebuild", function()
       error(err, 0)
     end
   end)
+end)
+
+h.test("immediate Source reopen cannot inherit Readers from a completed deletion", function()
+  local plugin = require("markdown-table-wrap")
+  local reader = require("markdown-table-wrap.reader")
+  plugin.setup({ auto_preview = false })
+  local path = vim.fn.tempname() .. ".md"
+  vim.fn.writefile(table_lines, path)
+  vim.cmd("edit " .. vim.fn.fnameescape(path))
+  local source = vim.api.nvim_get_current_buf()
+  vim.bo[source].filetype = "markdown"
+  local view = plugin.reader_preview()
+  vim.cmd("bdelete " .. source)
+  vim.fn.bufload(source)
+  vim.wait(50)
+  h.assert_false("old Reader no longer owns reopened Source", reader.is_reader(view))
+  h.assert_false("old projection is disposed", vim.api.nvim_buf_is_valid(view))
+  delete_buffer(source)
+  vim.fn.delete(path)
 end)
 
 h.test("debounced refreshes are isolated by buffer and keep their scheduled target", function()
@@ -432,7 +552,11 @@ h.test("Reader scratch configuration failure cleans the partial buffer", functio
     local original_create_autocmd = vim.api.nvim_create_autocmd
     local original_notify = vim.notify
     vim.api.nvim_create_autocmd = function(event, opts)
-      if event == "BufWriteCmd" and opts.buffer and vim.b[opts.buffer].markdown_table_wrap_reader == true then
+      if
+        (event == "BufWriteCmd" or (type(event) == "table" and vim.tbl_contains(event, "BufWriteCmd")))
+        and opts.buffer
+        and vim.b[opts.buffer].markdown_table_wrap_reader == true
+      then
         error("forced Reader scratch configuration failure")
       end
       return original_create_autocmd(event, opts)
@@ -1172,4 +1296,65 @@ h.test("wiping a Source cleans every dependent Reader", function()
   end, 5)
   h.assert_false("deleted Source removes Reader state", reader.is_reader(reader_bufnr))
   h.assert_false("deleted Source removes Reader buffer", vim.api.nvim_buf_is_valid(reader_bufnr))
+end)
+
+h.test("deleting a named Source removes Readers and queued refresh without closing windows", function()
+  local plugin = require("markdown-table-wrap")
+  local reader = require("markdown-table-wrap.reader")
+  for _, command in ipairs({ "bdelete", "bwipeout", "bunload" }) do
+    plugin.setup({ auto_preview = false, debounce_ms = 20 })
+    local source = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(source, vim.fn.tempname() .. ".md")
+    vim.api.nvim_buf_set_lines(source, 0, -1, false, table_lines)
+    vim.bo[source].filetype = "markdown"
+    vim.bo[source].modified = false
+    vim.api.nvim_set_current_buf(source)
+    local first_win = vim.api.nvim_get_current_win()
+    local first_reader = plugin.reader_preview()
+    vim.cmd("vsplit")
+    local second_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_buf(source)
+    local second_reader = plugin.reader_preview()
+    plugin.schedule_refresh({ bufnr = source, force = true })
+    vim.cmd(command .. " " .. source)
+    vim.wait(100, function()
+      return not vim.api.nvim_buf_is_valid(first_reader) and not vim.api.nvim_buf_is_valid(second_reader)
+    end, 5)
+    for _, view in ipairs({ first_reader, second_reader }) do
+      h.assert_false(command .. " disposes Reader", vim.api.nvim_buf_is_valid(view))
+      h.assert_false(command .. " releases Reader ownership", reader.is_reader(view))
+    end
+    h.assert_eq(command .. " cancels refresh", plugin.state.refresh_tokens[source], nil)
+    h.assert_eq(command .. " clears source policy", plugin.state.buffer_configs[source], nil)
+    h.assert_true(command .. " preserves first window", vim.api.nvim_win_is_valid(first_win))
+    h.assert_true(command .. " preserves second window", vim.api.nvim_win_is_valid(second_win))
+    vim.api.nvim_set_current_win(first_win)
+    if vim.api.nvim_win_is_valid(second_win) then
+      vim.api.nvim_win_close(second_win, true)
+    end
+    delete_buffer(source)
+  end
+end)
+
+h.test("refused deletion and Source rename preserve Reader ownership and unsaved data", function()
+  local plugin = require("markdown-table-wrap")
+  local reader = require("markdown-table-wrap.reader")
+  plugin.setup({ auto_preview = false })
+  local source = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_buf_set_name(source, vim.fn.tempname() .. ".md")
+  vim.api.nvim_buf_set_lines(source, 0, -1, false, table_lines)
+  vim.bo[source].filetype = "markdown"
+  vim.api.nvim_set_current_buf(source)
+  local view = plugin.reader_preview()
+  local ok = pcall(vim.cmd, "bdelete " .. source)
+  h.assert_false("dirty Source deletion is refused", ok)
+  vim.wait(30)
+  h.assert_true("refusal preserves Reader", reader.is_reader(view))
+  h.assert_true("refusal preserves modified Source", vim.bo[source].modified)
+  h.assert_deep_eq("refusal preserves Source bytes", vim.api.nvim_buf_get_lines(source, 0, -1, false), table_lines)
+  vim.api.nvim_buf_set_name(source, vim.fn.tempname() .. "-renamed.md")
+  vim.wait(30)
+  h.assert_true("rename is not deletion", reader.is_reader(view))
+  plugin.close_reader()
+  delete_buffer(source)
 end)

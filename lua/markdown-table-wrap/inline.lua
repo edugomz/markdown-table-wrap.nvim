@@ -1,4 +1,5 @@
 local render = require("markdown-table-wrap.render")
+local utf8 = require("markdown-table-wrap.utf8")
 
 local M = {}
 
@@ -41,7 +42,7 @@ local border_chars = {
 }
 
 local function iter_chars(text)
-  return (text or ""):gmatch("[%z\1-\127\194-\244][\128-\191]*")
+  return utf8.iter(text or "")
 end
 
 local function append_chunk(chunks, text, hl_group)
@@ -226,7 +227,10 @@ local function set_render_window(winid, config, in_table)
   if saved_concealcursors[winid] == nil then
     saved_concealcursors[winid] = vim.wo[winid].concealcursor
   end
-  vim.wo[winid].concealcursor = "nvc"
+  -- `conceal` is normally inactive while inserting.  When callers opt out of
+  -- clearing Inline on InsertEnter, keep the source layer concealed there as
+  -- well so it cannot appear underneath the still-visible virtual table.
+  vim.wo[winid].concealcursor = config.clear_on_insert == false and config.inline_mode == "replace" and "nvci" or "nvc"
 
   if should_disable_wrap(config, in_table) then
     if saved_wraps[winid] == nil then
@@ -306,18 +310,18 @@ local function restore_buffer_views(snapshots)
   end
 end
 
-local function conceal_source_line(bufnr, row)
+local function conceal_source_line(bufnr, row, mark)
   local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-  if line == "" then
-    return
+  mark = mark or {}
+  if line ~= "" then
+    mark.end_row = row
+    mark.end_col = #line
+    mark.conceal = ""
   end
 
-  vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
-    end_row = row,
-    end_col = #line,
-    conceal = "",
-    priority = 9999,
-  })
+  if next(mark) ~= nil then
+    vim.api.nvim_buf_set_extmark(bufnr, namespace, row, 0, mark)
+  end
 end
 
 local function table_key(table_info)
@@ -349,10 +353,13 @@ local function show_replace(bufnr, table_info, config, rendered)
   end
   local priority = config.overlay_priority or 10000
 
-  for source_offset = 0, source_count - 1 do
-    conceal_source_line(bufnr, start_row + source_offset)
+  local extra
+  if rendered_count > overlay_count and not config.inline_viewport_scrolling then
+    extra = {}
+    for index = overlay_count + 1, rendered_count do
+      table.insert(extra, (rendered.line_objects or rendered.lines)[index])
+    end
   end
-
   for source_offset = 0, overlay_count - 1 do
     local line_obj = (rendered.line_objects or rendered.lines)[first_rendered + source_offset + 1]
     local mark = {
@@ -367,22 +374,18 @@ local function show_replace(bufnr, table_info, config, rendered)
     else
       mark.virt_text_pos = "overlay"
     end
-
-    vim.api.nvim_buf_set_extmark(bufnr, namespace, start_row + source_offset, 0, mark)
+    if extra and source_offset == source_count - 1 then
+      mark.virt_lines = virt_lines(extra, overlay_count + 1)
+      mark.virt_lines_above = false
+    end
+    conceal_source_line(bufnr, start_row + source_offset, mark)
   end
 
-  if rendered_count > overlay_count and not config.inline_viewport_scrolling then
-    local extra = {}
-    for index = overlay_count + 1, rendered_count do
-      table.insert(extra, (rendered.line_objects or rendered.lines)[index])
-    end
-
-    vim.api.nvim_buf_set_extmark(bufnr, namespace, table_info.end_lnum - 1, 0, {
-      virt_lines = virt_lines(extra, overlay_count + 1),
-      virt_lines_above = false,
-      right_gravity = false,
-      priority = priority,
-    })
+  -- A rendered slice can be shorter than its Source table. Those Source rows
+  -- still need concealment, but never a second overlay mark on a row that has
+  -- virtual text.
+  for source_offset = overlay_count, source_count - 1 do
+    conceal_source_line(bufnr, start_row + source_offset, { priority = 9999 })
   end
 end
 

@@ -53,6 +53,37 @@ h.test("active context resolves Source Inline and Reader to one Source", functio
   end)
 end)
 
+h.test("context keeps a parser exception as an Inspectable diagnostic", function()
+  local plugin = require("markdown-table-wrap")
+  local parser = require("markdown-table-wrap.parser")
+  plugin.setup({ auto_preview = false })
+
+  h.with_buffer(table_lines, function(source_bufnr)
+    vim.bo[source_bufnr].filetype = "markdown"
+    local original_parse_at_cursor = parser.parse_at_cursor
+    parser.parse_at_cursor = function()
+      error("forced parser failure")
+    end
+
+    local ok, context = pcall(plugin.get_state, source_bufnr)
+    parser.parse_at_cursor = original_parse_at_cursor
+    if not ok then
+      error(context, 0)
+    end
+
+    h.assert_true("parser failure is retained on the context", context.parse_error ~= nil)
+    h.assert_true(
+      "parser failure remains actionable",
+      context.parse_error:find("forced parser failure", 1, true) ~= nil
+    )
+    h.assert_eq("parser failure does not masquerade as a table", context.table, nil)
+    h.assert_true(
+      "Inspect exposes parser failure",
+      table.concat(require("markdown-table-wrap.inspect").format(context), "\n"):find("Parse error:", 1, true) ~= nil
+    )
+  end)
+end)
+
 h.test("view events include safe Source and Reader identities", function()
   local plugin = require("markdown-table-wrap")
   local events = {}

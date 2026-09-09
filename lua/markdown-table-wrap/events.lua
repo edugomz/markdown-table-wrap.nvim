@@ -16,10 +16,9 @@ function M.emit(pattern, data)
     modeline = false,
     data = safe_data(data),
   }
-  local ok = pcall(vim.api.nvim_exec_autocmds, "User", opts)
+  local ok, err = pcall(vim.api.nvim_exec_autocmds, "User", opts)
   if not ok then
-    opts.data = nil
-    pcall(vim.api.nvim_exec_autocmds, "User", opts)
+    pcall(vim.notify, "MarkdownTableWrap: User event " .. pattern .. " failed: " .. tostring(err), vim.log.levels.ERROR)
   end
 end
 

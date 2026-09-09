@@ -480,6 +480,39 @@ h.test("inline insert mode highlights every wrapped header line", function()
   end)
 end)
 
+h.test("inline replace keeps conceal and virtual text on one mark", function()
+  local plugin = require("markdown-table-wrap")
+  local inline = require("markdown-table-wrap.inline")
+
+  plugin.setup({
+    preview_mode = "inline",
+    inline_mode = "replace",
+    auto_preview = false,
+    render_all = true,
+    clear_on_insert = false,
+  })
+
+  h.with_buffer({ "| A |", "| --- |", "| one |" }, function(buf)
+    vim.bo[buf].filetype = "markdown"
+    plugin.refresh_auto({ force = true })
+
+    local overlay_marks = 0
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, inline.namespace(), 0, -1, { details = true })) do
+      local details = mark[4] or {}
+      if details.virt_text then
+        overlay_marks = overlay_marks + 1
+        h.assert_eq("overlay mark conceals its same source row", details.conceal, "")
+      end
+    end
+    h.assert_true("replace mode creates overlay marks", overlay_marks > 0)
+    h.assert_true(
+      "clear_on_insert false keeps conceal active in Insert",
+      vim.wo.concealcursor:find("i", 1, true) ~= nil
+    )
+    inline.clear(buf)
+  end)
+end)
+
 h.test("table link opener uses source cell urls", function()
   local nav = require("markdown-table-wrap.nav")
   local opened = nil

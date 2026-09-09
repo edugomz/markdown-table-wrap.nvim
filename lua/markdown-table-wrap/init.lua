@@ -1,6 +1,6 @@
 local M = {}
 
-M.version = "0.7.0"
+M.version = "0.8.0"
 
 local config_module = require("markdown-table-wrap.config")
 M.config = config_module.defaults()
@@ -90,6 +90,9 @@ local function inline_viewport_for(bufnr)
 end
 
 local function config_for_buffer(bufnr)
+  if not is_auto_preview_buffer(bufnr) then
+    return M.config
+  end
   local preview_mode = preview_mode_for(bufnr)
   local auto_preview = auto_preview_for(bufnr)
   local inline_viewport_scrolling = inline_viewport_for(bufnr)
@@ -123,13 +126,20 @@ local function config_for_buffer(bufnr)
   return config
 end
 
-function M.get_buffer_config(bufnr)
+local function canonical_bufnr(bufnr)
   bufnr = normalize_bufnr(bufnr)
+  return require("markdown-table-wrap.reader").source_bufnr(bufnr)
+    or (bufnr == M.state.buf and M.state.float_source_bufnr)
+    or bufnr
+end
+
+function M.get_buffer_config(bufnr)
+  bufnr = canonical_bufnr(bufnr)
   return vim.deepcopy(config_for_buffer(bufnr))
 end
 
 function M.get_preview_mode(bufnr)
-  bufnr = normalize_bufnr(bufnr)
+  bufnr = canonical_bufnr(bufnr)
   return preview_mode_for(bufnr)
 end
 
@@ -296,6 +306,8 @@ end
 local function table_signature(bufnr, table_info, config)
   local lines = vim.api.nvim_buf_get_lines(bufnr, table_info.start_lnum - 1, table_info.end_lnum, false)
   return table.concat({
+    tostring(vim.api.nvim_buf_get_changedtick(bufnr)),
+    require("markdown-table-wrap.render").layout_signature(table_info, config),
     tostring(table_info.start_lnum),
     tostring(table_info.end_lnum),
     tostring(vim.api.nvim_win_get_width(0)),
@@ -307,6 +319,9 @@ local function table_signature(bufnr, table_info, config)
     tostring(config.row_separator),
     tostring(config.inline_mode),
     tostring(config.clear_on_visual),
+    tostring(config.clear_on_insert),
+    tostring(config.overlay_fill),
+    tostring(config.overlay_priority),
     tostring(config.inline_virtual_text),
     tostring(config.inline_disable_wrap),
     tostring(config.inline_wrap_scope),
@@ -319,6 +334,11 @@ end
 local function all_tables_signature(bufnr, tables, config)
   local parts = {
     tostring(vim.api.nvim_buf_get_changedtick(bufnr)),
+    tostring(require("markdown-table-wrap.render").text_area_width()),
+    tostring(config.fit_to_window),
+    config_module.link_layout_signature(config.link),
+    tostring(config.overlay_priority),
+    tostring(config.clear_on_insert),
     tostring(vim.api.nvim_win_get_width(0)),
     tostring(config.max_width_ratio),
     tostring(config.min_col_width),
@@ -371,6 +391,9 @@ function M.close_preview(opts)
 
   close_existing()
   local bufnr = vim.api.nvim_get_current_buf()
+  if not require("markdown-table-wrap.inline").is_active(bufnr) then
+    return false
+  end
   require("markdown-table-wrap.inline").clear(bufnr)
   if M.state.inline_buf == bufnr then
     M.state.inline_buf = nil
@@ -588,6 +611,7 @@ end
 
 function M.pause_buffer(bufnr)
   bufnr = normalize_bufnr(bufnr)
+  require("markdown-table-wrap.reader").cancel_insert_handoff(bufnr)
   M.state.paused_buffers[bufnr] = true
   M.state.last_signature[bufnr] = nil
 end
@@ -679,7 +703,7 @@ function M.refresh_auto(opts)
   opts = opts or {}
   local bufnr = normalize_bufnr(opts.bufnr)
   local inline = require("markdown-table-wrap.inline")
-  if not vim.api.nvim_buf_is_valid(bufnr) or vim.api.nvim_get_current_buf() ~= bufnr then
+  if not is_auto_preview_buffer(bufnr) or vim.api.nvim_get_current_buf() ~= bufnr then
     return
   end
 
@@ -688,7 +712,7 @@ function M.refresh_auto(opts)
   -- Float is authoritative while its window is alive; otherwise the delayed
   -- callback immediately closes it and makes the keypress appear to do
   -- nothing.
-  if M.state.float_source_bufnr == bufnr and M.state.win ~= nil and vim.api.nvim_win_is_valid(M.state.win) then
+  if M.state.float_source_bufnr and M.state.win ~= nil and vim.api.nvim_win_is_valid(M.state.win) then
     return
   end
   local config = config_for_buffer(bufnr)
@@ -708,9 +732,11 @@ function M.refresh_auto(opts)
 
   local mode = vim.api.nvim_get_mode().mode
   if not config.auto_preview_in_insert and mode:match("^i") then
-    inline.clear(bufnr)
-    M.state.inline_buf = nil
-    M.state.last_signature[bufnr] = nil
+    if config.clear_on_insert ~= false then
+      inline.clear(bufnr)
+      M.state.inline_buf = nil
+      M.state.last_signature[bufnr] = nil
+    end
     return
   end
 
@@ -802,7 +828,7 @@ end
 function M.schedule_refresh(opts)
   opts = vim.deepcopy(opts or {})
   local bufnr = normalize_bufnr(opts.bufnr)
-  if not vim.api.nvim_buf_is_valid(bufnr) then
+  if not is_auto_preview_buffer(bufnr) then
     return
   end
 
@@ -933,6 +959,7 @@ function M.disable_auto_preview()
     return false
   end
   local source_bufnr = context.source_bufnr
+  require("markdown-table-wrap.reader").cancel_insert_handoff(source_bufnr)
   M.state.paused_buffers[source_bufnr] = true
   M.state.auto_buffers[source_bufnr] = false
   invalidate_scheduled_refresh(source_bufnr)
@@ -1087,6 +1114,7 @@ local function create_autocmds()
   end
 
   M.state.augroup = vim.api.nvim_create_augroup("MarkdownTableWrap", { clear = true })
+  require("markdown-table-wrap.reader_io").install(M.state.augroup)
 
   vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
     group = M.state.augroup,
@@ -1174,9 +1202,42 @@ local function create_autocmds()
     end,
   })
 
+  vim.api.nvim_create_autocmd("OptionSet", {
+    group = M.state.augroup,
+    pattern = { "number", "relativenumber", "numberwidth", "signcolumn", "foldcolumn", "statuscolumn", "tabstop" },
+    callback = function()
+      local winid = vim.api.nvim_get_current_win()
+      local bufnr = vim.api.nvim_win_get_buf(winid)
+      local reader = require("markdown-table-wrap.reader")
+      if reader.is_reader(bufnr) then
+        -- Rebuild outside the option callback so integrations can finish
+        -- updating their gutter before width is measured.
+        vim.schedule(function()
+          if vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_buf(winid) == bufnr then
+            reader.refresh_windows({ winid })
+          end
+        end)
+      elseif is_auto_preview_buffer(bufnr) then
+        M.schedule_refresh({ bufnr = bufnr, winid = winid, silent = true })
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("BufFilePost", {
+    group = M.state.augroup,
+    callback = function(args)
+      if is_auto_preview_buffer(args.buf) then
+        require("markdown-table-wrap.reader").refresh_source(args.buf)
+      end
+    end,
+  })
+
   vim.api.nvim_create_autocmd("InsertEnter", {
     group = M.state.augroup,
     callback = function(args)
+      if not is_auto_preview_buffer(args.buf) then
+        return
+      end
       local config = config_for_buffer(args.buf)
       if config.auto_preview_in_insert or not config.clear_on_insert then
         return
@@ -1250,6 +1311,9 @@ local function create_autocmds()
         return
       end
       require("markdown-table-wrap.inline").detach_window(vim.api.nvim_get_current_win())
+      if not is_auto_preview_buffer(args.buf) then
+        return
+      end
       local config = config_for_buffer(args.buf)
       if config.render_all then
         return
@@ -1265,33 +1329,67 @@ local function create_autocmds()
     end,
   })
 
-  vim.api.nvim_create_autocmd("BufWipeout", {
+  local unloading = {}
+  vim.api.nvim_create_autocmd({ "BufUnload", "BufDelete", "BufWipeout" }, {
     group = M.state.augroup,
     callback = function(args)
-      if args.buf == M.state.buf then
-        close_existing({ skip_buf = args.buf })
-      elseif args.buf == M.state.float_source_bufnr then
-        close_existing()
+      local bufnr = args.buf
+      if args.event == "BufUnload" then
+        unloading[bufnr] = {}
       end
-      require("markdown-table-wrap.cell_ops").cleanup(args.buf)
-      require("markdown-table-wrap.reader").cleanup(args.buf)
-      require("markdown-table-wrap.inline").dispose(args.buf)
-      require("markdown-table-wrap.cache").clear_buffer(args.buf)
-      require("markdown-table-wrap.discovery").clear(args.buf)
-      M.state.refresh_tokens[args.buf] = nil
-      M.state.paused_buffers[args.buf] = nil
-      M.state.auto_buffers[args.buf] = nil
-      M.state.buffer_modes[args.buf] = nil
-      M.state.inline_viewports[args.buf] = nil
-      M.state.wide_viewports[args.buf] = nil
-      M.state.buffer_configs[args.buf] = nil
-      M.state.gx_fallbacks[args.buf] = nil
-      M.state.gx_installed[args.buf] = nil
-      M.state.gx_callbacks[args.buf] = nil
-      M.state.last_signature[args.buf] = nil
-      M.state.visual_buffers[args.buf] = nil
-      if M.state.inline_buf == args.buf then
-        M.state.inline_buf = nil
+      local unload_token = unloading[bufnr]
+      if args.event == "BufWipeout" then
+        if bufnr == M.state.buf then
+          close_existing({ skip_buf = bufnr })
+        elseif bufnr == M.state.float_source_bufnr then
+          close_existing()
+        end
+      end
+      local function cleanup()
+        if bufnr == M.state.buf then
+          close_existing({ skip_buf = bufnr })
+        elseif bufnr == M.state.float_source_bufnr then
+          close_existing()
+        end
+        require("markdown-table-wrap.cell_ops").cleanup(args.buf)
+        require("markdown-table-wrap.reader").cleanup(args.buf)
+        require("markdown-table-wrap.inline").dispose(args.buf)
+        require("markdown-table-wrap.cache").clear_buffer(args.buf)
+        require("markdown-table-wrap.discovery").clear(args.buf)
+        M.state.refresh_tokens[args.buf] = nil
+        M.state.paused_buffers[args.buf] = nil
+        M.state.auto_buffers[args.buf] = nil
+        M.state.buffer_modes[args.buf] = nil
+        M.state.inline_viewports[args.buf] = nil
+        M.state.wide_viewports[args.buf] = nil
+        M.state.buffer_configs[args.buf] = nil
+        M.state.gx_fallbacks[args.buf] = nil
+        M.state.gx_installed[args.buf] = nil
+        M.state.gx_callbacks[args.buf] = nil
+        M.state.last_signature[args.buf] = nil
+        M.state.visual_buffers[args.buf] = nil
+        if M.state.inline_buf == args.buf then
+          M.state.inline_buf = nil
+        end
+      end
+      if args.event ~= "BufUnload" and (unload_token or not vim.api.nvim_buf_is_loaded(bufnr)) then
+        -- Deletion has committed. Drop ownership now so a synchronous reload
+        -- of the same buffer number cannot inherit the old Reader generation.
+        -- Reader cleanup itself defers window replacement for buffer managers.
+        unloading[bufnr] = nil
+        cleanup()
+      else
+        -- Unload is also used by reload/rename flows. Do not dispose a Source
+        -- which is live again when that operation finishes.
+        vim.schedule(function()
+          if unload_token and unloading[bufnr] ~= unload_token then
+            return
+          end
+          unloading[bufnr] = nil
+          if not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_is_loaded(bufnr) then
+            cleanup()
+          end
+        end)
       end
     end,
   })
@@ -1327,6 +1425,7 @@ end
 
 ---@param opts? MarkdownTableWrapSetupOptions
 function M.setup(opts)
+  require("markdown-table-wrap.reader").cancel_insert_handoff()
   local setup_opts = vim.deepcopy(opts or {})
   local reset_state = setup_opts.reset_state == true
   setup_opts.reset_state = nil

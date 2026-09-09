@@ -46,6 +46,16 @@ local function source_cursor(source_bufnr, view_bufnr, winid, mode)
   return { 1, 0 }
 end
 
+local function span_contains_col(span, col)
+  if not span then
+    return false
+  end
+  if span.start_col == span.end_col then
+    return col == span.start_col
+  end
+  return col >= span.start_col and col < span.end_col
+end
+
 local function cell_context(source_bufnr, cursor, table_info)
   if not table_info then
     return nil
@@ -64,7 +74,7 @@ local function cell_context(source_bufnr, cursor, table_info)
   end
   for index, cell in ipairs(model_row or {}) do
     local span = cell.source_span
-    if span and cursor[2] >= span.start_col and cursor[2] <= span.end_col then
+    if span_contains_col(span, cursor[2]) then
       return {
         index = index,
         start_col = span.start_col,
@@ -83,7 +93,7 @@ local function cell_context(source_bufnr, cursor, table_info)
   local line = vim.api.nvim_buf_get_lines(source_bufnr, cursor[1] - 1, cursor[1], false)[1] or ""
   local spans = require("markdown-table-wrap.nav").spans(line)
   for index, span in ipairs(spans) do
-    if cursor[2] >= span.start_col and cursor[2] <= span.end_col then
+    if span_contains_col(span, cursor[2]) then
       return {
         index = index,
         start_col = span.start_col,
@@ -137,9 +147,17 @@ function M.resolve(opts)
   local winid = resolve_window(view_bufnr, opts.winid)
   local cursor = source_cursor(source_bufnr, view_bufnr, winid, mode)
   local table_info = nil
+  local parse_error = nil
   local ok, parsed = pcall(require("markdown-table-wrap.parser").parse_at_cursor, source_bufnr, cursor[1])
   if ok then
     table_info = parsed
+  else
+    parse_error = string.format(
+      "MarkdownTableWrap: parser failed while resolving Source buffer %d at line %d: %s",
+      source_bufnr,
+      cursor[1],
+      tostring(parsed)
+    )
   end
 
   local path = vim.api.nvim_buf_get_name(source_bufnr)
@@ -173,6 +191,7 @@ function M.resolve(opts)
       columns = #table_info.header,
       excess_cells = excess_cells,
     } or nil,
+    parse_error = parse_error,
     cell = cell_context(source_bufnr, cursor, table_info),
     config = config,
     cache = {

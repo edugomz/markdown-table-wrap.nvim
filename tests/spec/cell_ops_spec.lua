@@ -320,10 +320,18 @@ h.test("vic selects every rendered segment of one logical cell", function()
   h.assert_eq("vic covers each wrapped cell line", #marks, cell.render_end_row - cell.render_start_row + 1)
   for _, mark in ipairs(marks) do
     local line = vim.api.nvim_buf_get_lines(reader_bufnr, mark[2], mark[2] + 1, false)[1] or ""
-    local highlighted = mark[4].virt_text[1][1]
-    h.assert_true("vic starts inside each exact cell segment", mark[3] < #line)
-    h.assert_false("vic overlay excludes the following border", highlighted:find("│", 1, true) ~= nil)
-    h.assert_eq("vic overlay uses Visual highlight", mark[4].virt_text[1][2], "Visual")
+    local rendered = {}
+    local visual = {}
+    h.assert_eq("vic redraws the whole concealed line from column zero", mark[3], 0)
+    for _, chunk in ipairs(mark[4].virt_text or {}) do
+      table.insert(rendered, chunk[1])
+      if chunk[2] == "Visual" then
+        table.insert(visual, chunk[1])
+      end
+    end
+    h.assert_eq("vic full-line overlay retains the rendered text", table.concat(rendered), line)
+    h.assert_true("vic overlay includes an exact Visual chunk", #visual > 0)
+    h.assert_false("vic Visual chunks exclude the following border", table.concat(visual):find("│", 1, true) ~= nil)
   end
 
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
@@ -602,6 +610,101 @@ h.test("cic refuses a stale cell span after Source changes while leaving Reader"
   h.assert_eq("stale cic leaves Source visible", vim.api.nvim_get_current_buf(), source_bufnr)
 
   vim.api.nvim_del_augroup_by_id(group)
+  close_and_delete(plugin, source_bufnr)
+end)
+
+h.test("Reader delete revalidates the Source identity after selecting its span", function()
+  local plugin, source_bufnr, reader_bufnr = open_reader(72)
+  h.assert_true("cell is found for delete revalidation", position_on_cell(reader_bufnr, 5, 2) ~= nil)
+  local original_target = vim.api.nvim_buf_get_lines(source_bufnr, 4, 5, false)[1]
+  vim.fn.setreg('"', "existing register")
+
+  local group = vim.api.nvim_create_augroup("MarkdownTableWrapDeleteRevalidation", { clear = true })
+  vim.api.nvim_create_autocmd("ModeChanged", {
+    group = group,
+    buffer = source_bufnr,
+    once = true,
+    callback = function()
+      vim.api.nvim_buf_set_lines(source_bufnr, 0, 1, false, { "Changed while selecting the Source cell." })
+    end,
+  })
+
+  h.assert_false(
+    "delete refuses a Source changed while selecting its cell span",
+    require("markdown-table-wrap.cell_ops").delete(reader_bufnr)
+  )
+  h.assert_eq(
+    "delete never applies the stale cell span",
+    vim.api.nvim_buf_get_lines(source_bufnr, 4, 5, false)[1],
+    original_target
+  )
+  h.assert_eq("delete preserves registers after stale span selection", vim.fn.getreg('"'), "existing register")
+
+  vim.api.nvim_del_augroup_by_id(group)
+  close_and_delete(plugin, source_bufnr)
+end)
+
+h.test("Reader put revalidates the Source identity after selecting its span", function()
+  local plugin, source_bufnr, reader_bufnr = open_reader(72)
+  h.assert_true("cell is found for put revalidation", position_on_cell(reader_bufnr, 5, 2) ~= nil)
+  local original_target = vim.api.nvim_buf_get_lines(source_bufnr, 4, 5, false)[1]
+  vim.fn.setreg('"', "replacement")
+
+  local group = vim.api.nvim_create_augroup("MarkdownTableWrapPutRevalidation", { clear = true })
+  vim.api.nvim_create_autocmd("ModeChanged", {
+    group = group,
+    buffer = source_bufnr,
+    once = true,
+    callback = function()
+      vim.api.nvim_buf_set_lines(source_bufnr, 0, 1, false, { "Changed while selecting the Source cell." })
+    end,
+  })
+
+  h.assert_false(
+    "put refuses a Source changed while selecting its cell span",
+    require("markdown-table-wrap.cell_ops").put(reader_bufnr)
+  )
+  h.assert_eq(
+    "put never applies the stale cell span",
+    vim.api.nvim_buf_get_lines(source_bufnr, 4, 5, false)[1],
+    original_target
+  )
+  h.assert_eq("put preserves the input register after stale span selection", vim.fn.getreg('"'), "replacement")
+
+  vim.api.nvim_del_augroup_by_id(group)
+  close_and_delete(plugin, source_bufnr)
+end)
+
+h.test("Reader put rejects structural pipes while retaining escaped and code-span pipes", function()
+  local plugin, source_bufnr, reader_bufnr = open_reader(72)
+  h.assert_true("cell is found for unsafe put", position_on_cell(reader_bufnr, 5, 2) ~= nil)
+  local original = vim.api.nvim_buf_get_lines(source_bufnr, 4, 5, false)[1]
+  vim.fn.setreg("a", "one | two")
+  h.assert_false(
+    "unescaped put pipe is refused",
+    require("markdown-table-wrap.cell_ops").put(reader_bufnr, { register = "a" })
+  )
+  h.assert_eq("unsafe put preserves Source", vim.api.nvim_buf_get_lines(source_bufnr, 4, 5, false)[1], original)
+
+  vim.fn.setreg("a", [[one \| two]])
+  h.assert_true(
+    "escaped put pipe is retained",
+    require("markdown-table-wrap.cell_ops").put(reader_bufnr, { register = "a" })
+  )
+  h.assert_true(
+    "escaped pipe remains in the Source cell",
+    vim.api.nvim_buf_get_lines(source_bufnr, 4, 5, false)[1]:find([[one \| two]], 1, true) ~= nil
+  )
+
+  h.assert_true("cell is found for code-span put", position_on_cell(reader_bufnr, 5, 2) ~= nil)
+  vim.fn.setreg("a", "`one|two`")
+  h.assert_true(
+    "code-span put pipe is retained",
+    require("markdown-table-wrap.cell_ops").put(reader_bufnr, { register = "a" })
+  )
+  local parsed = require("markdown-table-wrap.parser").parse_at_cursor(source_bufnr, 5)
+  h.assert_eq("code-span pipe does not create a structural cell", #parsed.header, 3)
+
   close_and_delete(plugin, source_bufnr)
 end)
 

@@ -86,6 +86,7 @@
 ---@field window { width?: integer, height?: integer }
 ---@field table? { start_lnum: integer, separator_lnum: integer, end_lnum: integer, columns: integer, excess_cells: integer }
 ---@field cell? { index: integer, start_col: integer, end_col: integer, text: string, source_span?: MarkdownTableWrapSourceSpan, table_id?: string, row_index?: integer, present?: boolean, tokens?: MarkdownTableWrapInlineToken[], spans?: table[] }
+---@field parse_error? string Actionable parser exception retained for diagnostics; ordinary not-in-table results do not set it
 ---@field cache { changedtick: integer, rendered: boolean, paused: boolean, auto_preview: boolean, enabled: boolean, entries: integer, stages: string[], hits: integer, misses: integer, token_entries: integer }
 ---@field discovery { requested: "auto"|"lua"|"treesitter", used: "lua"|"treesitter", fallback_reason?: string, range_count: integer }
 ---@field config MarkdownTableWrapConfig
@@ -94,6 +95,8 @@
 ---@field enabled? boolean
 ---@field close? MarkdownTableWrapMappingKey
 ---@field edit? MarkdownTableWrapMappingKey
+---@field undo? MarkdownTableWrapMappingKey
+---@field redo? MarkdownTableWrapMappingKey
 ---@field open_link? MarkdownTableWrapMappingKey
 ---@field help? MarkdownTableWrapMappingKey
 ---@field copy_cell? MarkdownTableWrapMappingKey
@@ -123,6 +126,10 @@
 
 ---@class MarkdownTableWrapCacheConfig
 ---@field enabled? boolean
+
+---@class MarkdownTableWrapExportOptions
+---@field format? "tsv"|"csv"
+---@field csv_formula_policy? "safe"|"raw" `safe` (the default) prefixes formula-leading CSV fields with an apostrophe; TSV is unchanged
 
 ---@class MarkdownTableWrapReaderConfig
 ---@field auto_open? "has_table"|"always"

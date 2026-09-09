@@ -1,5 +1,6 @@
 local parser = require("markdown-table-wrap.parser")
 local width = require("markdown-table-wrap.width")
+local container = require("markdown-table-wrap.container")
 
 local M = {}
 local popup_state = nil
@@ -147,7 +148,7 @@ local function format_row(values, widths, alignments)
   return table.concat(parts)
 end
 
-local function canonical_lines(table_info, rows, alignments)
+local function canonical_lines(table_info, rows, alignments, prefixes)
   local columns = #(rows[1] or table_info.header)
   local widths = {}
   for index = 1, columns do
@@ -169,13 +170,27 @@ local function canonical_lines(table_info, rows, alignments)
   for index = 2, #rows do
     table.insert(lines, format_row(rows[index], widths, alignments))
   end
-  local prefix = (table_info.container or {}).render_prefix or ""
-  if prefix ~= "" then
+  if prefixes then
     for index, line in ipairs(lines) do
-      lines[index] = prefix .. line
+      lines[index] = (prefixes[index] or "") .. line
     end
   end
   return lines
+end
+
+local function physical_prefixes(source_bufnr, table_info, count)
+  local source_lines = vim.api.nvim_buf_get_lines(source_bufnr, table_info.start_lnum - 1, table_info.end_lnum, false)
+  local prefixes = {}
+  local fallback = ""
+  for index, line in ipairs(source_lines) do
+    local prefix = container.line(line).source_prefix or ""
+    prefixes[index] = prefix
+    fallback = prefix
+  end
+  for index = #prefixes + 1, count do
+    prefixes[index] = fallback
+  end
+  return prefixes
 end
 
 local function replace_table(context, table_info, rows, alignments, opts)
@@ -191,7 +206,8 @@ local function replace_table(context, table_info, rows, alignments, opts)
     notify("the backing Source buffer is read-only", vim.log.levels.ERROR, opts)
     return false
   end
-  local lines = canonical_lines(table_info, rows, alignments)
+  local line_count = #rows + 1 -- header + delimiter + body rows
+  local lines = canonical_lines(table_info, rows, alignments, physical_prefixes(source_bufnr, table_info, line_count))
   local ok, err =
     pcall(vim.api.nvim_buf_set_lines, source_bufnr, table_info.start_lnum - 1, table_info.end_lnum, false, lines)
   if not ok then
@@ -444,6 +460,14 @@ function M.commit_cell_popup(opts)
   end
   local values = vim.api.nvim_buf_get_lines(popup_state.buf, 0, -1, false)
   local value = table.concat(values, " "):gsub("\r", "")
+  if require("markdown-table-wrap.pipes").has(value) then
+    notify(
+      "cell content contains a structural pipe; escape it as \\| or use a matched code span",
+      vim.log.levels.ERROR,
+      opts
+    )
+    return false
+  end
   local context = popup_state.context
   local source_bufnr = context.source_bufnr
   local span = popup_state.cell.source_span

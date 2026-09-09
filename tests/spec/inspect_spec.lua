@@ -6,6 +6,35 @@ local table_lines = {
   "| one | [target](target.md) |",
 }
 
+h.test("User event failures are reported once without retrying listeners or dropping data", function()
+  local events = require("markdown-table-wrap.events")
+  local original_exec = vim.api.nvim_exec_autocmds
+  local original_notify = vim.notify
+  local calls = {}
+  local notices = {}
+  vim.api.nvim_exec_autocmds = function(event, opts)
+    table.insert(calls, { event = event, data = opts.data })
+    error("listener failed")
+  end
+  vim.notify = function(message, level)
+    table.insert(notices, { message = message, level = level })
+  end
+
+  local ok, err = pcall(events.emit, "MarkdownTableWrapRendered", { source_bufnr = 4, mode = "reader" })
+  vim.api.nvim_exec_autocmds = original_exec
+  vim.notify = original_notify
+  if not ok then
+    error(err, 0)
+  end
+
+  h.assert_eq("failed User event is delivered once", #calls, 1)
+  h.assert_eq("failed User event keeps payload", calls[1].data.source_bufnr, 4)
+  h.assert_true(
+    "failed User event is surfaced",
+    #notices > 0 and notices[1].message:find("listener failed", 1, true) ~= nil
+  )
+end)
+
 h.test("inspect and statusline expose coherent Source and Reader context", function()
   local plugin = require("markdown-table-wrap")
   plugin.setup({ auto_preview = false, mappings = { reader = false } })

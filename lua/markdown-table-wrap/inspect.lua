@@ -41,7 +41,7 @@ function M.format(context)
   local window_width = context.window.width or vim.o.columns
   local width_budget = math.max(1, math.floor(window_width * (tonumber(config.max_width_ratio) or 1)))
 
-  return {
+  local lines = {
     string.format("MarkdownTableWrap %s", require("markdown-table-wrap").version or "unknown"),
     string.format("Mode: %s", label(context.mode)),
     string.format("Source: %s (buffer %d)", display_path(context), context.source_bufnr),
@@ -92,6 +92,10 @@ function M.format(context)
       tostring(config.inline_wrap_scope)
     ),
   }
+  if context.parse_error then
+    table.insert(lines, 7, "Parse error: " .. context.parse_error)
+  end
+  return lines
 end
 
 ---@param context MarkdownTableWrapContext

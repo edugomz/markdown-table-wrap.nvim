@@ -17,6 +17,8 @@ local specs = {
   "tests.spec.config_spec",
   "tests.spec.inline_spec",
   "tests.spec.reader_spec",
+  "tests.spec.reader_io_spec",
+  "tests.spec.reader_edges_spec",
   "tests.spec.context_spec",
   "tests.spec.actions_spec",
   "tests.spec.links_spec",
@@ -33,6 +35,7 @@ local specs = {
   "tests.spec.wide_table_spec",
   "tests.spec.reader_ergonomics_spec",
   "tests.spec.table_edit_spec",
+  "tests.spec.generated_spec",
 }
 
 for _, spec in ipairs(specs) do

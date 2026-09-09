@@ -56,20 +56,9 @@ h.test("format preserves blockquote containment and aligns physical Source pipes
   })
   h.assert_true("quoted format succeeds", editor.format({ silent = true }))
   local formatted = lines(buf)
-  for _, line in ipairs(formatted) do
-    h.assert_true("formatted row remains quoted", vim.startswith(line, "> |"))
-  end
-  local function pipe_columns(line)
-    local result = {}
-    for index = 1, #line do
-      if line:sub(index, index) == "|" then
-        table.insert(result, index)
-      end
-    end
-    return result
-  end
-  h.assert_deep_eq("quoted Source rows align", pipe_columns(formatted[1]), pipe_columns(formatted[3]))
-  h.assert_deep_eq("quoted delimiter aligns", pipe_columns(formatted[1]), pipe_columns(formatted[2]))
+  h.assert_true("header keeps its exact quote prefix", vim.startswith(formatted[1], "> |"))
+  h.assert_true("delimiter keeps its compact quote prefix", vim.startswith(formatted[2], ">|"))
+  h.assert_true("body keeps its indentation and quote spacing", vim.startswith(formatted[3], "  > |"))
   cleanup(buf)
 end)
 
@@ -198,6 +187,34 @@ h.test("long-cell popup writes exact Source range and supports cancel", function
   h.assert_false("stale popup commit is rejected", editor.commit_cell_popup({ silent = true }))
   editor.close_cell_popup()
   h.assert_true("stale Source edit remains authoritative", lines(buf)[3]:find("changed elsewhere", 1, true) ~= nil)
+  cleanup(buf)
+end)
+
+h.test("cell popup rejects structural pipes while retaining escaped and code-span pipes", function()
+  local editor = require("markdown-table-wrap.table_edit")
+  local _, buf = setup_source({
+    "| A | B |",
+    "| --- | --- |",
+    "| one | original |",
+  })
+  vim.api.nvim_win_set_cursor(0, { 3, 11 })
+  local popup_buf = editor.open_cell_popup({ silent = true })
+  h.assert_true("popup opens for unsafe pipe", popup_buf ~= false)
+  vim.api.nvim_buf_set_lines(popup_buf, 0, -1, false, { "one | two" })
+  h.assert_false("popup rejects an unescaped structural pipe", editor.commit_cell_popup({ silent = true }))
+  h.assert_true("rejected popup remains open for correction", vim.api.nvim_buf_is_valid(popup_buf))
+  h.assert_true("unsafe popup preserves Source", lines(buf)[3]:find("original", 1, true) ~= nil)
+
+  vim.api.nvim_buf_set_lines(popup_buf, 0, -1, false, { [[one \| two]] })
+  h.assert_true("popup accepts an escaped pipe", editor.commit_cell_popup({ silent = true }))
+  h.assert_true("escaped popup pipe remains in Source", lines(buf)[3]:find([[one \| two]], 1, true) ~= nil)
+
+  vim.api.nvim_win_set_cursor(0, { 3, 11 })
+  popup_buf = editor.open_cell_popup({ silent = true })
+  vim.api.nvim_buf_set_lines(popup_buf, 0, -1, false, { "`one|two`" })
+  h.assert_true("popup accepts a code-span pipe", editor.commit_cell_popup({ silent = true }))
+  local parsed = require("markdown-table-wrap.parser").parse_at_cursor(buf, 3)
+  h.assert_eq("code-span popup pipe does not add a table column", #parsed.header, 2)
   cleanup(buf)
 end)
 
