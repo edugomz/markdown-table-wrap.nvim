@@ -43,6 +43,12 @@ local function styled_chars(cell)
 
   local result = {}
   for ch, start_col in utf8.iter(cell.text or "") do
+    -- Virtual text measures a tab as one cell, while a real Reader line uses
+    -- tabstop-dependent columns. Keep both projections identical; raw Source
+    -- and TSV/CSV values retain the original tab.
+    if ch == "\t" then
+      ch = " "
+    end
     local span = span_kind_at(cell.spans, start_col)
     if type(span) == "table" then
       table.insert(result, {
@@ -77,7 +83,7 @@ local function styled_chars(cell)
   return coalesced
 end
 
-local function line_from_chars(chars)
+local function line_from_chars(chars, trim_trailing)
   local text = {}
   local spans = {}
   local offset = 0
@@ -127,8 +133,25 @@ local function line_from_chars(chars)
 
   close_span()
 
+  local rendered_text = table.concat(text)
+  if trim_trailing then
+    rendered_text = rendered_text:gsub("%s+$", "")
+    -- Chunks are byte-column based. If a trailing styled span ended in a wrap
+    -- boundary space, clamp or discard it with the output text rather than
+    -- leaving a highlight range past the rendered line.
+    local rendered_end = #rendered_text
+    local retained_spans = {}
+    for _, span in ipairs(spans) do
+      if span.start_col < rendered_end then
+        span.end_col = math.min(span.end_col, rendered_end)
+        table.insert(retained_spans, span)
+      end
+    end
+    spans = retained_spans
+  end
+
   return {
-    text = table.concat(text):gsub("%s+$", ""),
+    text = rendered_text,
     spans = spans,
   }
 end
@@ -142,7 +165,9 @@ local function slice_chars(chars, start_index, end_index)
 end
 
 local function append_line(lines, chars)
-  table.insert(lines, line_from_chars(chars))
+  -- A space used as a wrap boundary should not become visible padding, but it
+  -- must still participate in the preceding fit check below.
+  table.insert(lines, line_from_chars(chars, true))
 end
 
 local function expand_oversized_item(item, limit)
@@ -170,9 +195,11 @@ local function wrap_segment(chars, limit, lines)
 
   for _, source_item in ipairs(chars) do
     for _, item in ipairs(expand_oversized_item(source_item, limit)) do
+      -- Do not trim here. `123 ` is four display cells even though a line
+      -- eventually emitted at that boundary renders as `123`.
       while #current > 0 and width.strwidth(line_from_chars(current).text .. item.text) > limit do
         if last_break and last_break < #current then
-          local break_line = line_from_chars(slice_chars(current, 1, last_break))
+          local break_line = line_from_chars(slice_chars(current, 1, last_break), true)
           if break_line.text ~= "" then
             table.insert(lines, break_line)
           end

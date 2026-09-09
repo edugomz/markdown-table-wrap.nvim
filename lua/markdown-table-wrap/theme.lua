@@ -148,9 +148,35 @@ local function transparent_spec(spec, key)
   return vim.tbl_deep_extend("force", linked, result)
 end
 
+local function resolved_path(path)
+  local absolute = vim.fn.fnamemodify(path, ":p")
+  local resolved = vim.fn.resolve(absolute)
+  if vim.fs and vim.fs.normalize then
+    return vim.fs.normalize(resolved)
+  end
+  return vim.fn.simplify(resolved)
+end
+
+local function is_within(path, directory)
+  if path == directory then
+    return true
+  end
+  local separator = path:sub(#directory + 1, #directory + 1)
+  return path:sub(1, #directory) == directory and (separator == "/" or separator == "\\")
+end
+
+local function valid_preset_filename(name)
+  return type(name) == "string" and name ~= "" and name ~= "." and name ~= ".." and not name:find("[/\\%z\1-\31\127]")
+end
+
 local function load_theme_file(config, preset_name)
   local theme_dir = config.theme_dir
   if not theme_dir or preset_name == "auto" then
+    return nil
+  end
+
+  if not valid_preset_filename(preset_name) then
+    vim.notify("MarkdownTableWrap: refused unsafe theme preset name", vim.log.levels.WARN)
     return nil
   end
 
@@ -159,12 +185,19 @@ local function load_theme_file(config, preset_name)
     return nil
   end
 
-  local ok, theme = pcall(dofile, path)
+  local directory = resolved_path(theme_dir)
+  local resolved = resolved_path(path)
+  if not is_within(resolved, directory) then
+    vim.notify("MarkdownTableWrap: refused theme outside configured theme_dir", vim.log.levels.WARN)
+    return nil
+  end
+
+  local ok, theme = pcall(dofile, resolved)
   if ok and type(theme) == "table" then
     return theme
   end
 
-  vim.notify("MarkdownTableWrap: failed to load theme " .. path, vim.log.levels.WARN)
+  vim.notify("MarkdownTableWrap: failed to load theme " .. resolved, vim.log.levels.WARN)
   return nil
 end
 

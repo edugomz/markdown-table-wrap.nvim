@@ -192,6 +192,92 @@ h.test("v0.4 discovery backend is inspectable and explicit Tree-sitter fails saf
   end)
 end)
 
+h.test("v0.4 Tree-sitter discovery supplements incomplete ranges and rejects zero-height nodes", function()
+  local discovery = require("markdown-table-wrap.discovery")
+  local parser = require("markdown-table-wrap.parser")
+  local lines = {
+    "ordinary prose",
+    "still ordinary",
+    "| A | B |",
+    "| --- | --- |",
+    "| one | two |",
+  }
+
+  local function node(kind, range, children)
+    return {
+      type = function()
+        return kind
+      end,
+      range = function()
+        return range[1], range[2], range[3], range[4]
+      end,
+      iter_children = function()
+        local index = 0
+        return function()
+          index = index + 1
+          return children[index]
+        end
+      end,
+    }
+  end
+
+  h.with_buffer(lines, function(buf)
+    vim.bo[buf].filetype = "markdown"
+    local original = vim.treesitter.get_parser
+    local zero_height = node("table", { 0, 0, 0, 0 }, {})
+    local unrelated = node("table", { 0, 0, 1, 0 }, {})
+    local root = node("document", { 0, 0, 5, 0 }, { zero_height, unrelated })
+    vim.treesitter.get_parser = function()
+      return {
+        parse = function()
+          return { {
+            root = function()
+              return root
+            end,
+          } }
+        end,
+      }
+    end
+
+    local ranges, status = discovery.discover(buf, lines, { backend = "treesitter" })
+    local model = parser.parse_all(buf, { backend = "treesitter", cache = false })
+    vim.treesitter.get_parser = original
+
+    h.assert_eq("Tree-sitter remains selected when it has a usable range", status.used, "treesitter")
+    h.assert_true(
+      "incomplete Tree-sitter range is diagnosed",
+      status.fallback_reason:find("supplemented", 1, true) ~= nil
+    )
+    h.assert_eq("supplemental Lua range is retained", ranges[2].start_lnum, 3)
+    h.assert_eq("unrelated Tree-sitter node cannot hide Lua table", #model, 1)
+    h.assert_eq("supplemental table carries Lua provenance", model[1].discovery_backend, "lua")
+  end)
+
+  h.with_buffer(lines, function(buf)
+    vim.bo[buf].filetype = "markdown"
+    local original = vim.treesitter.get_parser
+    local root = node("document", { 0, 0, 5, 0 }, { node("table", { 0, 0, 0, 0 }, {}) })
+    vim.treesitter.get_parser = function()
+      return {
+        parse = function()
+          return { {
+            root = function()
+              return root
+            end,
+          } }
+        end,
+      }
+    end
+
+    local ranges, status = discovery.discover(buf, lines, { backend = "treesitter" })
+    vim.treesitter.get_parser = original
+
+    h.assert_eq("zero-height Tree-sitter node falls back to Lua", status.used, "lua")
+    h.assert_true("zero-height fallback reason is inspectable", status.fallback_reason:find("usable", 1, true) ~= nil)
+    h.assert_eq("fallback preserves Lua range", ranges[1].start_lnum, 3)
+  end)
+end)
+
 h.test("v0.4 parse and layout caches invalidate by changedtick and window signature", function()
   local parser = require("markdown-table-wrap.parser")
   local render = require("markdown-table-wrap.render")
@@ -285,6 +371,9 @@ h.test("v0.4 buffer wipe releases parser layout and discovery state", function()
   h.assert_true("parse cache exists before wipe", cache.inspect(buf).entries > 0)
   require("markdown-table-wrap.render").render_table(model, plugin.config)
   vim.api.nvim_buf_delete(buf, { force = true })
+  vim.wait(100, function()
+    return cache.inspect(buf).entries == 0
+  end)
   h.assert_eq("all buffer cache stages released", cache.inspect(buf).entries, 0)
   h.assert_eq(
     "discovery status released",

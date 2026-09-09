@@ -37,6 +37,10 @@ local function percent_decode(value)
   end)
 end
 
+local function has_control_byte(value)
+  return tostring(value or ""):find("[%z\1-\31\127]") ~= nil
+end
+
 local function decode_anchor(anchor)
   return percent_decode(anchor)
 end
@@ -45,7 +49,10 @@ local function local_file_uri(raw)
   local value = raw:sub(6)
   if vim.startswith(value, "//") then
     value = value:sub(3)
-    if vim.startswith(value, "localhost/") then
+    if vim.startswith(value, "./") then
+      -- `file://./relative.md` is commonly used as a Source-relative local
+      -- target. It is not a remote host named `.`.
+    elseif value:lower():match("^localhost/") then
       value = value:sub(#"localhost" + 1)
     elseif not vim.startswith(value, "/") then
       return nil, "remote file URI hosts are not supported"
@@ -54,7 +61,11 @@ local function local_file_uri(raw)
   if value == "" then
     return nil, "empty file URI"
   end
-  return percent_decode(value)
+  value = percent_decode(value)
+  if has_control_byte(value) then
+    return nil, "local file URI contains a control byte"
+  end
+  return value
 end
 
 local function slugify(text)
@@ -65,7 +76,14 @@ end
 
 function M.classify(raw, opts)
   opts = opts or {}
-  raw = vim.trim(tostring(raw or ""))
+  raw = tostring(raw or "")
+  if has_control_byte(raw) then
+    return { kind = "unresolved", raw = raw, reason = "target contains a control byte", label = opts.label }
+  end
+  if has_control_byte(percent_decode(raw)) then
+    return { kind = "unresolved", raw = raw, reason = "decoded target contains a control byte", label = opts.label }
+  end
+  raw = vim.trim(raw)
   if raw:match("^<.*>$") then
     raw = raw:sub(2, -2)
   end
@@ -122,7 +140,7 @@ function M.classify(raw, opts)
   end
   local line = nil
   local line_path, line_number = path_part:match("^(.-):(%d+)$")
-  if line_path and line_path ~= "" and not path_part:match("^%a:[/\\]") then
+  if line_path and line_path ~= "" then
     path_part = line_path
     line = tonumber(line_number)
   end

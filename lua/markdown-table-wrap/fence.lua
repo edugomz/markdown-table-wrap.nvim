@@ -33,20 +33,22 @@ function M.mask(lines)
 
   for lnum, line in ipairs(lines or {}) do
     local current = container.line(line)
-    if active and active.container_signature ~= "source:0" and current.signature ~= active.container_signature then
-      active = nil
-    end
     if active then
-      result[lnum] = true
-      local content = active.container_signature == "source:0" and line or current.content
-      if M.is_closer(content, active.char, active.length) then
+      local content = active.container_depth == 0 and line or container.strip_quote_prefix(line, active.container_depth)
+      if content then
+        result[lnum] = true
+      end
+      if content and M.is_closer(content, active.char, active.length) then
+        active = nil
+      elseif not content then
         active = nil
       end
-    else
+    end
+    if not active and not result[lnum] then
       local char, length = M.opener(current.content)
       if char then
         result[lnum] = true
-        active = { char = char, length = length, container_signature = current.signature }
+        active = { char = char, length = length, container_depth = current.depth }
       end
     end
   end

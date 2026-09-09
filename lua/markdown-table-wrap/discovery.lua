@@ -72,11 +72,13 @@ local function treesitter_ranges(bufnr)
     local node_type = node:type()
     if node_type == "pipe_table" or node_type == "table" then
       local start_row, _, end_row, end_col = node:range()
-      table.insert(ranges, {
-        start_lnum = start_row + 1,
-        end_lnum = end_row + (end_col > 0 and 1 or 0),
-        backend = "treesitter",
-      })
+      if end_row > start_row then
+        table.insert(ranges, {
+          start_lnum = start_row + 1,
+          end_lnum = end_row + (end_col > 0 and 1 or 0),
+          backend = "treesitter",
+        })
+      end
       return
     end
     for child in node:iter_children() do
@@ -88,12 +90,36 @@ local function treesitter_ranges(bufnr)
     return nil, "Markdown Tree-sitter tree could not be traversed"
   end
   if #ranges == 0 then
-    return nil, "Markdown parser exposes no pipe-table nodes"
+    return nil, "Markdown parser exposes no usable pipe-table ranges"
   end
   table.sort(ranges, function(a, b)
     return a.start_lnum < b.start_lnum
   end)
   return ranges
+end
+
+local function contains_range(outer, inner)
+  return outer.start_lnum <= inner.start_lnum and outer.end_lnum >= inner.end_lnum
+end
+
+local function complete_treesitter_ranges(ranges, lines)
+  local complete = vim.deepcopy(ranges)
+  for _, lua_range in ipairs(lua_ranges(lines)) do
+    local covered = false
+    for _, tree_range in ipairs(ranges) do
+      if contains_range(tree_range, lua_range) then
+        covered = true
+        break
+      end
+    end
+    if not covered then
+      table.insert(complete, lua_range)
+    end
+  end
+  table.sort(complete, function(a, b)
+    return a.start_lnum < b.start_lnum
+  end)
+  return complete
 end
 
 function M.configure(opts)
@@ -112,6 +138,11 @@ function M.discover(bufnr, lines, opts)
     ranges, reason = treesitter_ranges(bufnr)
     if ranges then
       used = "treesitter"
+      local complete = complete_treesitter_ranges(ranges, lines)
+      if #complete > #ranges then
+        reason = "Tree-sitter ranges supplemented by Lua discovery"
+      end
+      ranges = complete
     else
       ranges = lua_ranges(lines)
       used = "lua"

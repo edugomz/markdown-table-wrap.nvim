@@ -149,3 +149,47 @@ h.test("theme ensure skips unchanged highlight application", function()
     error(err, 0)
   end
 end)
+
+h.test("theme files stay within theme_dir while Unicode preset names remain valid", function()
+  local theme = require("markdown-table-wrap.theme")
+  local theme_dir = vim.fn.tempname()
+  local parent_dir = vim.fn.fnamemodify(theme_dir, ":h")
+  local outside_name = "markdown_table_wrap_outside_" .. vim.fn.fnamemodify(theme_dir, ":t")
+  local outside_path = parent_dir .. "/" .. outside_name .. ".lua"
+  local unicode_name = "\u{30C6}\u{30FC}\u{30DE}"
+  local unicode_path = theme_dir .. "/" .. unicode_name .. ".lua"
+  vim.fn.mkdir(theme_dir, "p")
+  vim.fn.writefile({ "return { border = { fg = '#ff0000' } }" }, outside_path)
+  vim.fn.writefile({ "return { border = { fg = '#00ff00' } }" }, unicode_path)
+
+  for _, preset in ipairs({ "../" .. outside_name, "..\\" .. outside_name, outside_path }) do
+    theme.apply({ highlight_preset = preset, theme_dir = theme_dir })
+    local traversal = vim.api.nvim_get_hl(0, { name = "MarkdownTableWrapBorder", link = false })
+    h.assert_false("unsafe preset is not executed: " .. preset, traversal.fg == tonumber("ff0000", 16))
+  end
+
+  local candidate = theme_dir .. "/linked.lua"
+  vim.fn.writefile({ "return { border = { fg = '#0000ff' } }" }, candidate)
+  local original_resolve = vim.fn.resolve
+  vim.fn.resolve = function(path)
+    if path == candidate then
+      return outside_path
+    end
+    return original_resolve(path)
+  end
+  local ok, err = pcall(theme.apply, { highlight_preset = "linked", theme_dir = theme_dir })
+  vim.fn.resolve = original_resolve
+  if not ok then
+    error(err, 0)
+  end
+  local linked = vim.api.nvim_get_hl(0, { name = "MarkdownTableWrapBorder", link = false })
+  h.assert_false("resolved path outside theme_dir is not executed", linked.fg == tonumber("0000ff", 16))
+
+  theme.apply({ highlight_preset = unicode_name, theme_dir = theme_dir })
+  local unicode = vim.api.nvim_get_hl(0, { name = "MarkdownTableWrapBorder", link = false })
+  h.assert_eq("Unicode theme filename is allowed", unicode.fg, tonumber("00ff00", 16))
+
+  vim.fn.delete(unicode_path)
+  vim.fn.delete(outside_path)
+  vim.fn.delete(theme_dir, "d")
+end)

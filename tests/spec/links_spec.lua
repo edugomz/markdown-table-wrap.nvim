@@ -43,6 +43,47 @@ h.test("link targets classify URLs files anchors wiki links and images", functio
   )
 end)
 
+h.test("local file URIs reject control bytes and preserve local URI semantics", function()
+  local links = require("markdown-table-wrap.links")
+  local source = "/tmp/course/index.md"
+
+  for _, target in ipairs({
+    "\tfile:///tmp/notes.md",
+    "file:///tmp/notes%00.md",
+    "file:///tmp/notes%0A.md",
+    "file:///tmp/notes%1f.md",
+    "file:///tmp/notes%7F.md",
+    "relative%0A.md",
+    "#section%0A",
+  }) do
+    h.assert_eq(
+      "unsafe local target is unresolved: " .. vim.inspect(target),
+      links.classify(target, { source_path = source }).kind,
+      "unresolved"
+    )
+  end
+
+  h.assert_eq(
+    "relative file URI stays Source-relative",
+    links.classify("file://./relative.md", { source_path = source }).path,
+    "/tmp/course/relative.md"
+  )
+  h.assert_eq(
+    "localhost file URI is case-insensitive",
+    links.classify("file://LOCALHOST/tmp/notes.md", { source_path = source }).path,
+    "/tmp/notes.md"
+  )
+end)
+
+h.test("Windows drive paths retain a trailing line target", function()
+  local target = require("markdown-table-wrap.links").classify([[C:\work\notes.md:27]], {
+    source_path = "/tmp/course/index.md",
+  })
+
+  h.assert_eq("Windows line suffix is parsed", target.line, 27)
+  h.assert_false("Windows line suffix is not part of the path", target.path:find(":27", 1, true) ~= nil)
+end)
+
 h.test("external link opening enforces the configured scheme allowlist", function()
   local links = require("markdown-table-wrap.links")
   local original_open = vim.ui.open

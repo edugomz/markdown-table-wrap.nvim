@@ -31,6 +31,22 @@ h.test("parser keeps pipes inside multi-backtick code spans", function()
   end)
 end)
 
+h.test("parser only hides pipes in matched code spans", function()
+  local parser = require("markdown-table-wrap.parser")
+
+  local tables = parser.parse_lines({
+    "| A | B | C |",
+    "| --- | --- | --- |",
+    "| foo `unfinished | second | third |",
+    "| `foo\\` | second | third |",
+  })
+
+  h.assert_eq("unmatched code marker leaves later separators structural", tables[1].rows[1][2].text, "second")
+  h.assert_eq("unmatched code marker retains final cell", tables[1].rows[1][3].text, "third")
+  h.assert_eq("backslash inside code does not hide its closer", tables[1].rows[2][2].text, "second")
+  h.assert_eq("backslash code span is rendered as code", tables[1].rows[2][1].spans[1].kind, "code")
+end)
+
 h.test("shared UTF-8 scanner does not skip structural pipes after invalid bytes", function()
   local parser = require("markdown-table-wrap.parser")
   local invalid = string.char(0xFF)
@@ -267,6 +283,27 @@ h.test("parser supports blockquote tables and rejects list-contained tables", fu
   end)
 end)
 
+h.test("parser conservatively skips list-continuation pipe tables", function()
+  local parser = require("markdown-table-wrap.parser")
+  local cases = {
+    { "- item", "  | A | B |", "  | --- | --- |", "  | one | two |" },
+    { "1. item", "   | A | B |", "   | --- | --- |", "   | one | two |" },
+    { "- [ ] task", "  | A | B |", "  | --- | --- |", "  | one | two |" },
+    { "- outer", "  - inner", "    | A | B |", "    | --- | --- |", "    | one | two |" },
+    { "> - item", ">   | A | B |", ">   | --- | --- |", ">   | one | two |" },
+  }
+
+  for index, lines in ipairs(cases) do
+    h.assert_eq("list continuation remains unparsed " .. index, #parser.parse_lines(lines), 0)
+  end
+
+  h.assert_eq(
+    "ordinary indented-looking top-level table remains supported",
+    #parser.parse_lines({ "  | A | B |", "  | --- | --- |", "  | one | two |" }),
+    1
+  )
+end)
+
 h.test("blockquote table spans map cells and inline tokens to Source bytes", function()
   local parser = require("markdown-table-wrap.parser")
 
@@ -322,6 +359,24 @@ h.test("parser ignores quoted table-shaped text inside quoted fences", function(
     h.assert_eq("one quoted table remains", #tables, 1)
     h.assert_eq("quoted table starts after fence", tables[1].start_lnum, 6)
   end)
+end)
+
+h.test("quoted fences keep deeper quote content masked", function()
+  local parser = require("markdown-table-wrap.parser")
+  local tables = parser.parse_lines({
+    "> ```markdown",
+    ">> ```",
+    ">> | Code | Table |",
+    ">> | --- | --- |",
+    ">> | one | two |",
+    "> ```",
+    "> | Real | Table |",
+    "> | --- | --- |",
+    "> | yes | rendered |",
+  })
+
+  h.assert_eq("deeper quoted fence content is not parsed", #tables, 1)
+  h.assert_eq("deeper fence marker does not close the outer fence", tables[1].start_lnum, 7)
 end)
 
 h.test("top-level fences keep quote-shaped code inside the same fence", function()

@@ -46,6 +46,33 @@ function M.line(line)
   }
 end
 
+-- Strip exactly `depth` quote markers, leaving any deeper container marker in
+-- the returned content.  Fenced-code tracking uses this instead of stripping
+-- every marker: a deeper quote is content of an outer quoted fence, not a
+-- change that ends that fence.
+function M.strip_quote_prefix(line, depth)
+  line = line or ""
+  depth = math.max(0, math.floor(tonumber(depth) or 0))
+  local cursor = 1
+
+  for _ = 1, depth do
+    local spaces = 0
+    while spaces < 3 and line:sub(cursor, cursor) == " " do
+      cursor = cursor + 1
+      spaces = spaces + 1
+    end
+    if line:sub(cursor, cursor) ~= ">" then
+      return nil
+    end
+    cursor = cursor + 1
+    if line:sub(cursor, cursor):match("[ \t]") then
+      cursor = cursor + 1
+    end
+  end
+
+  return line:sub(cursor), cursor - 1
+end
+
 function M.same(left, right)
   return left and right and left.signature == right.signature
 end

@@ -104,3 +104,15 @@ h.test("wrap prefers punctuation boundaries and preserves link metadata", functi
   end
   h.assert_true("wrapped link remains highlighted", link_spans > 0)
 end)
+
+h.test("wrap measures a trailing break space before trimming rendered output", function()
+  local wrap = require("markdown-table-wrap.wrap")
+  local lines = wrap.wrap_cell("123 4", 4)
+
+  h.assert_eq("trailing break creates two lines", #lines, 2)
+  h.assert_eq("first line trims only its rendered trailing space", lines[1].text, "123")
+  h.assert_eq("second line keeps the remaining character", lines[2].text, "4")
+  for index, line in ipairs(lines) do
+    h.assert_true("trailing-space regression line fits " .. index, vim.api.nvim_strwidth(line.text) <= 4)
+  end
+end)

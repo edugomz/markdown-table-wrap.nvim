@@ -18,7 +18,14 @@ end
 
 function M.positions(line)
   local positions = {}
-  local code_ticks = nil
+  line = line or ""
+
+  -- Record tick runs before deciding whether one opens code.  A run opens a
+  -- code span only when a later run of exactly the same length exists.  This
+  -- keeps unmatched backticks literal without repeatedly searching the rest of
+  -- a long line for every candidate opener.
+  local runs = {}
+  local later = {}
   local escaped = false
   local index = 1
 
@@ -27,24 +34,52 @@ function M.positions(line)
     if not ch then
       break
     end
-    if escaped then
+    if ch == "`" then
+      local count, run_end = backtick_run_at(line, index)
+      table.insert(runs, { start_col = start_col, end_col = run_end, count = count, escaped = escaped })
+      later[count] = (later[count] or 0) + 1
       escaped = false
+      index = run_end + 1
+    elseif escaped then
+      escaped = false
+      index = end_col + 1
     elseif ch == "\\" then
       escaped = true
-    elseif ch == "`" then
-      local count, run_end = backtick_run_at(line, index)
-      if not code_ticks then
-        code_ticks = count
-      elseif code_ticks == count then
-        code_ticks = nil
-      end
-      index = run_end + 1
-      goto continue
-    elseif ch == "|" and not code_ticks then
-      table.insert(positions, start_col)
+      index = end_col + 1
+    else
+      index = end_col + 1
     end
-    index = end_col + 1
-    ::continue::
+  end
+
+  local run_index = 1
+  local code_ticks = nil
+  escaped = false
+  index = 1
+  while index <= #line do
+    local run = runs[run_index]
+    if run and run.start_col == index then
+      later[run.count] = later[run.count] - 1
+      if code_ticks then
+        if run.count == code_ticks then
+          code_ticks = nil
+        end
+      elseif not run.escaped and later[run.count] > 0 then
+        code_ticks = run.count
+      end
+      escaped = false
+      index = run.end_col + 1
+      run_index = run_index + 1
+    else
+      local ch, start_col, end_col = utf8.next(line, index)
+      if escaped then
+        escaped = false
+      elseif ch == "\\" and not code_ticks then
+        escaped = true
+      elseif ch == "|" and not code_ticks then
+        table.insert(positions, start_col)
+      end
+      index = end_col + 1
+    end
   end
 
   return positions

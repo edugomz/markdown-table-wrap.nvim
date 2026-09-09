@@ -199,9 +199,15 @@ local function excess_cell_count(table_info)
   return count
 end
 
-local function export_value(value, format)
+local function export_value(value, format, opts)
   value = tostring(value or "")
   if format == "csv" then
+    -- Spreadsheet applications evaluate formula-leading CSV fields. Make CSV
+    -- safe by default while keeping a deliberate API opt-out for workflows
+    -- that need byte-for-byte formula fields.
+    if (opts or {}).csv_formula_policy ~= "raw" and value:find("^[=+%@%-\t\r]") then
+      value = "'" .. value
+    end
     if value:find('[,"\r\n]') then
       return '"' .. value:gsub('"', '""') .. '"'
     end
@@ -248,7 +254,7 @@ function M.export(opts)
     for _, row in ipairs(rows_for(table_info)) do
       local values = {}
       for index = 1, #table_info.header do
-        local value = export_value(source_cell(row[index], { link = {} }), format)
+        local value = export_value(source_cell(row[index], { link = {} }), format, opts)
         table.insert(values, value)
       end
       table.insert(row_outputs, table.concat(values, format == "csv" and "," or "\t"))

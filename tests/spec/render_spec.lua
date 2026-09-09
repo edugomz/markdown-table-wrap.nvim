@@ -317,6 +317,56 @@ h.test("render can shrink below preferred column width to fit the window", funct
   end)
 end)
 
+h.test("render promotes a width-one CJK or emoji column so borders remain aligned", function()
+  local parser = require("markdown-table-wrap.parser")
+  local render = require("markdown-table-wrap.render")
+
+  h.with_buffer({
+    "| A |",
+    "| --- |",
+    "| 中 |",
+    "| 😀 |",
+  }, function(buf)
+    local parsed = parser.parse_at_cursor(buf, 3)
+    local rendered = render.render_table(parsed, {
+      max_width_ratio = 1,
+      min_col_width = 1,
+      max_col_width = 8,
+      fit_to_window = true,
+      use_unicode_border = true,
+      table_border = "single",
+      row_separator = false,
+      wide_table = { columns = { [1] = { width = 1 } } },
+    })
+
+    h.assert_eq("wide glyph promotes fixed width-one column", rendered.column_widths[1], 2)
+    for index, line in ipairs(rendered.lines) do
+      h.assert_eq("wide-glyph border alignment " .. index, vim.api.nvim_strwidth(line), rendered.width)
+    end
+  end)
+end)
+
+h.test("render applies the fit budget after a blockquote prefix", function()
+  local parser = require("markdown-table-wrap.parser")
+  local render = require("markdown-table-wrap.render")
+
+  h.with_buffer({ "> > > | A |", "> > > | --- |", "> > > | content |" }, function(buf)
+    local rendered = render.render_table(parser.parse_at_cursor(buf, 3), {
+      max_width_ratio = 0.1,
+      min_col_width = 1,
+      max_col_width = 20,
+      fit_to_window = true,
+      use_unicode_border = true,
+      table_border = "single",
+      row_separator = false,
+    })
+
+    local post_prefix_budget = math.max(1, math.floor(render.text_area_width() * 0.1) - vim.api.nvim_strwidth("> > > "))
+    h.assert_eq("deep quote uses its post-prefix budget", rendered.layout.available, post_prefix_budget)
+    h.assert_true("quote prefix is retained", vim.startswith(rendered.lines[1], "> > > "))
+  end)
+end)
+
 h.test("render keeps every source row mapped when cells wrap", function()
   local parser = require("markdown-table-wrap.parser")
   local render = require("markdown-table-wrap.render")

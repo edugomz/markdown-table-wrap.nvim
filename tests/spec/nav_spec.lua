@@ -21,6 +21,34 @@ h.test("navigation spans ignore blockquote markers and preserve UTF-8 cells", fu
   h.assert_eq("second quoted cell is exact", line:sub(spans[2].start_col + 1, spans[2].end_col), "x\\|y")
 end)
 
+h.test("navigation treats source spans as end-exclusive and hits empty cells at their zero-width point", function()
+  local nav = require("markdown-table-wrap.nav")
+  local plugin = require("markdown-table-wrap")
+  plugin.setup({ auto_preview = false })
+
+  local line = "| A || C |"
+  local spans = nav.spans(line)
+  h.assert_deep_eq("empty source cell has a zero-width span", spans[2], { start_col = 5, end_col = 5 })
+
+  h.with_buffer({
+    line,
+    "| --- | --- | --- |",
+  }, function(bufnr)
+    vim.bo[bufnr].filetype = "markdown"
+
+    vim.api.nvim_win_set_cursor(0, { 1, 3 })
+    local after_first = plugin.get_state(bufnr)
+    h.assert_eq("the exclusive end of a cell does not hit that cell", after_first.cell, nil)
+
+    vim.api.nvim_win_set_cursor(0, { 1, 5 })
+    local empty = plugin.get_state(bufnr)
+    h.assert_eq("zero-width source span resolves its empty cell", empty.cell.index, 2)
+    h.assert_eq("empty cell text is retained", nav.current_cell_text(), "")
+    h.assert_true("navigation can leave an empty cell", nav.move_horizontal(1))
+    h.assert_deep_eq("navigation reaches the next cell", vim.api.nvim_win_get_cursor(0), { 1, 7 })
+  end)
+end)
+
 h.test("Float navigation shifts a wide-table viewport to reveal the target cell", function()
   local plugin = require("markdown-table-wrap")
   local nav = require("markdown-table-wrap.nav")
@@ -65,11 +93,11 @@ h.test("navigation moves across data rows and skips the separator", function()
     "| one | two |",
     "| three | four |",
   }, function(buf)
-    vim.api.nvim_win_set_cursor(0, { 1, 3 })
+    vim.api.nvim_win_set_cursor(0, { 1, 2 })
     h.assert_true("move right", nav.move_horizontal(1))
     h.assert_deep_eq("right enters second header cell", vim.api.nvim_win_get_cursor(0), { 1, 6 })
 
-    vim.api.nvim_win_set_cursor(0, { 1, 3 })
+    vim.api.nvim_win_set_cursor(0, { 1, 2 })
     h.assert_true("move down skips separator", nav.move_vertical(1))
     h.assert_deep_eq("down lands in first data row", vim.api.nvim_win_get_cursor(0), { 3, 2 })
 

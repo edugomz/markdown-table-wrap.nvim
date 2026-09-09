@@ -13,7 +13,7 @@ local function current_cell_index(spans, col)
   end
 
   for index, span in ipairs(spans) do
-    if col >= span.start_col and col <= span.end_col then
+    if (span.start_col == span.end_col and col == span.start_col) or (col >= span.start_col and col < span.end_col) then
       return index
     end
   end

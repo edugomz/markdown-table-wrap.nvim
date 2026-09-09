@@ -120,6 +120,36 @@ h.test("CSV export escapes delimiters and quotes", function()
   end)
 end)
 
+h.test("CSV export prevents spreadsheet formulas by default with an explicit raw opt-out", function()
+  local plugin = require("markdown-table-wrap")
+  plugin.setup({ auto_preview = false })
+
+  h.with_buffer({
+    "| Value |",
+    "| --- |",
+    "| =SUM(A1:A2) |",
+  }, function(buf)
+    vim.bo[buf].filetype = "markdown"
+    vim.api.nvim_win_set_cursor(0, { 3, 2 })
+    local ok, safe = plugin.export_table({ format = "csv", clipboard = false, silent = true })
+    h.assert_true("safe CSV export succeeds", ok)
+    h.assert_true("formula-leading CSV cell is neutralized", safe:find("'=SUM(A1:A2)", 1, true) ~= nil)
+
+    local raw_ok, raw = plugin.export_table({
+      format = "csv",
+      csv_formula_policy = "raw",
+      clipboard = false,
+      silent = true,
+    })
+    h.assert_true("raw CSV opt-out succeeds", raw_ok)
+    h.assert_true("raw CSV retains the original formula", raw:find("=SUM(A1:A2)", 1, true) ~= nil)
+
+    local tsv_ok, tsv = plugin.export_table({ format = "tsv", clipboard = false, silent = true })
+    h.assert_true("TSV export succeeds", tsv_ok)
+    h.assert_true("TSV remains exact for formula-leading data", tsv:find("=SUM(A1:A2)", 1, true) ~= nil)
+  end)
+end)
+
 h.test("TSV export escapes control characters without changing table shape", function()
   local plugin = require("markdown-table-wrap")
   plugin.setup({ auto_preview = false })

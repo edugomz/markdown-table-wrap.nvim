@@ -1,5 +1,13 @@
 local h = require("tests.helpers")
 
+h.test("Unicode word boundaries retain fullwidth letters and separate nonbreaking spaces", function()
+  local utf8 = require("markdown-table-wrap.utf8")
+  h.assert_true("fullwidth letters remain word-like", utf8.is_word("Ａ"))
+  h.assert_true("fullwidth numbers remain word-like", utf8.is_word("３"))
+  h.assert_false("fullwidth punctuation is a boundary", utf8.is_word("！"))
+  h.assert_false("nonbreaking space is a boundary", utf8.is_word(" "))
+end)
+
 h.test("markdown inline token parsing", function()
   local markdown = require("markdown-table-wrap.markdown")
   local parsed = markdown.parse_inline("`code` **bold** *italic* ~~strike~~ ==mark== [link](url)")
@@ -68,6 +76,37 @@ h.test("markdown parses multi-backtick inline code", function()
 
   h.assert_eq("multi-backtick display text", parsed.text, "a|b")
   h.assert_eq("multi-backtick kind", parsed.spans[1].kind, "code")
+end)
+
+h.test("markdown treats backslashes as literal inside code spans", function()
+  local markdown = require("markdown-table-wrap.markdown")
+  local parsed = markdown.parse_inline("`foo\\` tail")
+
+  h.assert_eq("backslash does not escape a code closer", parsed.text, "foo\\ tail")
+  h.assert_eq("backslash code span remains styled", parsed.spans[1].kind, "code")
+end)
+
+h.test("markdown composes nested emphasis as one outer render span with nested tokens", function()
+  local markdown = require("markdown-table-wrap.markdown")
+  local parsed = markdown.parse_inline("*outer **inner** end*")
+
+  h.assert_eq("nested emphasis display text", parsed.text, "outer inner end")
+  h.assert_eq("outer style owns the rendered span", #parsed.spans, 1)
+  h.assert_eq("outer style is italic", parsed.spans[1].kind, "italic")
+  h.assert_eq("outer token is retained", parsed.tokens[1].kind, "italic")
+  h.assert_eq("nested bold token is retained", parsed.tokens[1].children[2].kind, "bold")
+end)
+
+h.test("markdown keeps underscores adjacent to Unicode words literal", function()
+  local markdown = require("markdown-table-wrap.markdown")
+
+  h.assert_eq("accented word boundary", markdown.inline_to_text("café_emphasis_"), "café_emphasis_")
+  h.assert_eq("CJK word boundary", markdown.inline_to_text("中文_emphasis_"), "中文_emphasis_")
+  h.assert_eq(
+    "Unicode punctuation still permits emphasis",
+    markdown.inline_to_text("。_emphasis_。"),
+    "。emphasis。"
+  )
 end)
 
 h.test("markdown removes concealed code delimiters from link labels", function()

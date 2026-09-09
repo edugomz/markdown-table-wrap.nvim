@@ -267,17 +267,22 @@ end
 local function natural_widths(table_info, config)
   local columns = #table_info.header
   local widths = {}
+  local glyph_floors = {}
   local rows = all_rows(table_info)
 
   for col = 1, columns do
     local max_width = 0
+    local glyph_floor = 1
     for _, row in ipairs(rows) do
-      max_width = math.max(max_width, width.strwidth(markdown.apply_link_icons(row[col] or "", config)))
+      local cell = markdown.apply_link_icons(row[col] or "", config)
+      max_width = math.max(max_width, width.strwidth(cell))
+      glyph_floor = math.max(glyph_floor, width.glyph_width_floor(cell))
     end
     widths[col] = max_width
+    glyph_floors[col] = glyph_floor
   end
 
-  return widths
+  return widths, glyph_floors
 end
 
 local function table_width(col_widths, markers)
@@ -300,8 +305,8 @@ local function sum(values)
   return total
 end
 
-local function text_area_width()
-  local winid = vim.api.nvim_get_current_win()
+function M.text_area_width(winid)
+  winid = winid or vim.api.nvim_get_current_win()
   local info = vim.fn.getwininfo(winid)[1] or {}
   return math.max(1, vim.api.nvim_win_get_width(winid) - (info.textoff or 0))
 end
@@ -319,7 +324,10 @@ end
 local function distribute_widths(table_info, config)
   local columns = #table_info.header
   local prefix_width = width.strwidth(container_prefix(table_info))
-  local available = math.max(20, math.floor(text_area_width() * config.max_width_ratio) - prefix_width)
+  -- The table budget begins after its container prefix.  Applying a broad
+  -- floor before that subtraction made deeply quoted tables overflow narrow
+  -- windows by the discarded prefix width.
+  local available = math.max(1, math.floor(M.text_area_width() * config.max_width_ratio) - prefix_width)
   local border_cost = 1 + (columns * 3)
   local content_budget = math.max(columns, available - border_cost)
   local effective_min = config.min_col_width
@@ -328,18 +336,21 @@ local function distribute_widths(table_info, config)
   else
     content_budget = math.max(columns * effective_min, content_budget)
   end
-  local natural = natural_widths(table_info, config)
+  local natural, glyph_floors = natural_widths(table_info, config)
   local widths = {}
   local minimums = {}
   local fixed = {}
 
   for index = 1, columns do
     local rule = column_rule(config, index)
-    local minimum = math.max(effective_min, tonumber(rule.min) or effective_min)
+    local glyph_floor = glyph_floors[index] or 1
+    local minimum = math.max(effective_min, tonumber(rule.min) or effective_min, glyph_floor)
     local maximum = math.max(minimum, tonumber(rule.max) or config.max_col_width)
     minimums[index] = minimum
     if rule.width ~= nil then
-      widths[index] = math.max(1, math.min(maximum, tonumber(rule.width) or minimum))
+      -- A declared width of one cannot split a CJK/emoji glyph. Prefer a
+      -- bounded table overflow to a body row wider than its border.
+      widths[index] = math.max(glyph_floor, math.min(maximum, tonumber(rule.width) or minimum))
       fixed[index] = true
     else
       widths[index] = math.max(minimum, math.min(natural[index], maximum))
@@ -350,7 +361,7 @@ local function distribute_widths(table_info, config)
     local best
     for index = 1, columns do
       local rule = column_rule(config, index)
-      local floor = ignore_minimum and 1 or minimums[index]
+      local floor = ignore_minimum and (glyph_floors[index] or 1) or minimums[index]
       if not fixed[index] and widths[index] > floor then
         local priority = tonumber(rule.priority) or 0
         local weight = math.max(0.01, tonumber(rule.weight) or 1)
@@ -418,6 +429,7 @@ local function distribute_widths(table_info, config)
       content_budget = content_budget,
       natural_widths = natural,
       minimum_widths = minimums,
+      glyph_width_floors = glyph_floors,
       fixed = fixed,
       overflow = overflow,
     }
@@ -459,7 +471,7 @@ local function visible_columns(total, widths, config, table_info)
   else
     local available = math.max(
       1,
-      math.floor(text_area_width() * (config.max_width_ratio or 1)) - width.strwidth(container_prefix(table_info))
+      math.floor(M.text_area_width() * (config.max_width_ratio or 1)) - width.strwidth(container_prefix(table_info))
     )
     local budget = math.max(1, available - 3)
     count = 0
@@ -596,12 +608,12 @@ local function render_row(row, col_widths, align, chars, config, columns, marker
   return lines
 end
 
-local function render_table(table_info, config, readonly)
+function M.layout_signature(table_info, config, winid)
   config = config or {}
   local prefix = container_prefix(table_info)
-  local layout_key = table.concat({
+  return table.concat({
     tostring(table_info.id or table_info.start_lnum),
-    tostring(text_area_width()),
+    tostring(M.text_area_width(winid)),
     tostring(config.max_width_ratio),
     tostring(config.min_col_width),
     tostring(config.max_col_width),
@@ -613,6 +625,12 @@ local function render_table(table_info, config, readonly)
     config_module.link_layout_signature(config.link),
     prefix,
   }, "\31")
+end
+
+local function render_table(table_info, config, readonly)
+  config = config or {}
+  local prefix = container_prefix(table_info)
+  local layout_key = M.layout_signature(table_info, config)
   local cache = require("markdown-table-wrap.cache")
   local cached
   if table_info.source_bufnr then

@@ -1,4 +1,5 @@
 local M = {}
+local utf8 = require("markdown-table-wrap.utf8")
 
 local token_cache = {}
 local token_cache_order = {}
@@ -44,20 +45,21 @@ end
 
 local function delimiter_run(text, index, marker)
   local cursor = index
-  while text:sub(cursor, cursor) == marker do
+  local char = marker:sub(1, 1)
+  while text:sub(cursor, cursor) == char do
     cursor = cursor + 1
   end
   return cursor - index
 end
 
-local function find_closing_run(text, start_index, marker, length)
+local function find_closing_run(text, start_index, marker, length, literal)
   local cursor = start_index
   while cursor <= #text do
     local found = text:find(marker, cursor, true)
     if not found then
       return nil
     end
-    if not escaped_at(text, found) and delimiter_run(text, found, marker) == length then
+    if (literal or not escaped_at(text, found)) and delimiter_run(text, found, marker) == length then
       return found, found + length - 1
     end
     cursor = found + math.max(1, delimiter_run(text, found, marker))
@@ -72,7 +74,7 @@ local function find_balanced(text, open_index, open_char, close_char)
     local ch = text:sub(cursor, cursor)
     if ch == "`" and not escaped_at(text, cursor) then
       local length = delimiter_run(text, cursor, "`")
-      local close = find_closing_run(text, cursor + length, "`", length)
+      local close = find_closing_run(text, cursor + length, "`", length, true)
       if close then
         cursor = close + length
         goto continue
@@ -120,18 +122,18 @@ end
 local parse_nodes
 
 local function delimited_node(text, index, marker, kind, references, depth)
-  local close_start = text:find(marker, index + #marker, true)
-  while close_start and escaped_at(text, close_start) do
-    close_start = text:find(marker, close_start + #marker, true)
+  if delimiter_run(text, index, marker) ~= #marker then
+    return nil
   end
+  local close_start = find_closing_run(text, index + #marker, marker, #marker)
   if not close_start then
     return nil
   end
 
   if marker == "_" then
-    local previous = text:sub(index - 1, index - 1)
-    local following = text:sub(close_start + 1, close_start + 1)
-    if previous:match("[%w]") or following:match("[%w]") then
+    local previous = utf8.prev(text, index)
+    local following = utf8.next(text, close_start + #marker)
+    if utf8.is_word(previous) or utf8.is_word(following) then
       return nil
     end
   end
@@ -275,7 +277,7 @@ parse_nodes = function(text, first, last, references, depth)
       next_index = index + 2
     elseif ch == "`" and not escaped_at(text, index) then
       local length = delimiter_run(text, index, "`")
-      local close_start, close_end = find_closing_run(text, index + length, "`", length)
+      local close_start, close_end = find_closing_run(text, index + length, "`", length, true)
       if close_start and close_end <= last then
         local value = text:sub(index + length, close_start - 1):gsub("[\r\n]+", " ")
         if value:sub(1, 1) == " " and value:sub(-1) == " " and value:match("^ +$") == nil then

@@ -122,6 +122,33 @@ local function starts_list(content)
   return next_char == " " or next_char == "\t"
 end
 
+local function list_item_indent(content)
+  local indent, rest = (content or ""):match("^( *)(.*)$")
+  if starts_list(rest) then
+    return #indent
+  end
+  return nil
+end
+
+local function list_continuation(lines, start_lnum, table_container)
+  local table_indent = #(table_container.content:match("^( *)") or "")
+  if table_indent == 0 then
+    return false
+  end
+
+  for lnum = start_lnum - 1, 1, -1 do
+    local previous = container.line(lines[lnum] or "")
+    if not container.same(previous, table_container) or trim(previous.content) == "" then
+      break
+    end
+    local indent = list_item_indent(previous.content)
+    if indent ~= nil and table_indent > indent then
+      return true
+    end
+  end
+  return false
+end
+
 local function is_thematic_break(content)
   local compact = content:gsub("[ \t]", "")
   return compact:match("^%*%*%*+$") ~= nil or compact:match("^___+$") ~= nil or compact:match("^%-%-%-+$") ~= nil
@@ -278,6 +305,7 @@ local function parse_table_at(lines, start_lnum, references)
     or not container.same(header_container, separator_container)
     or not is_tableish_line(header_container.content)
     or starts_block(header_container.content)
+    or list_continuation(lines, start_lnum, header_container)
     or starts_block(separator_container.content)
     or not is_separator_row(separator_container.content)
   then
@@ -411,11 +439,13 @@ local function parse_lines(lines, stop_lnum, opts)
   local references = (opts or {}).references or collect_references(lines)
 
   if opts and opts.ranges then
+    local attempted = {}
     for _, range in ipairs(opts.ranges) do
       local lnum = range.start_lnum
       local finish = math.min(range.end_lnum or range.start_lnum, stop_lnum or #lines)
       while lnum <= finish do
-        local table_info = parse_table_at(lines, lnum, references)
+        local table_info = not attempted[lnum] and parse_table_at(lines, lnum, references) or nil
+        attempted[lnum] = true
         if table_info then
           table_info.discovery_backend = range.backend or "lua"
           table.insert(tables, table_info)
