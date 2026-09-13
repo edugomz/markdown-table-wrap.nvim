@@ -73,7 +73,10 @@ h.test("turning on diff for an already-open Reader window falls back to source a
   vim.wait(200, function()
     return reader.is_reader(vim.api.nvim_win_get_buf(left_win))
   end, 10)
-  h.assert_true("Reader opened for the left window before diffing", reader.is_reader(vim.api.nvim_win_get_buf(left_win)))
+  h.assert_true(
+    "Reader opened for the left window before diffing",
+    reader.is_reader(vim.api.nvim_win_get_buf(left_win))
+  )
 
   vim.cmd("vsplit")
   local right_win = vim.api.nvim_get_current_win()
@@ -101,10 +104,14 @@ h.test("turning on diff for an already-open Reader window falls back to source a
 
   vim.cmd("diffoff!")
   vim.wait(200, function()
-    return reader.is_reader(vim.api.nvim_win_get_buf(left_win)) and reader.is_reader(vim.api.nvim_win_get_buf(right_win))
+    return reader.is_reader(vim.api.nvim_win_get_buf(left_win))
+      and reader.is_reader(vim.api.nvim_win_get_buf(right_win))
   end, 10)
   h.assert_true("Reader resumes on the left window after diffoff", reader.is_reader(vim.api.nvim_win_get_buf(left_win)))
-  h.assert_true("Reader resumes on the right window after diffoff", reader.is_reader(vim.api.nvim_win_get_buf(right_win)))
+  h.assert_true(
+    "Reader resumes on the right window after diffoff",
+    reader.is_reader(vim.api.nvim_win_get_buf(right_win))
+  )
 
   vim.api.nvim_set_current_win(left_win)
   plugin.close_reader()
