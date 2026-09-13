@@ -33,6 +33,7 @@ local specs = {
   "tests.spec.wide_table_spec",
   "tests.spec.reader_ergonomics_spec",
   "tests.spec.table_edit_spec",
+  "tests.spec.diff_mode_spec",
 }
 
 for _, spec in ipairs(specs) do

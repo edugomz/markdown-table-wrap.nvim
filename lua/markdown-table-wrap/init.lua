@@ -718,6 +718,12 @@ function M.refresh_auto(opts)
     return
   end
 
+  -- Diff need real buffer. Swap buffer for fake render, diff break.
+  -- Inline virtual text also noise on top of diff. Leave diff window alone.
+  if vim.wo.diff then
+    return
+  end
+
   local parser = require("markdown-table-wrap.parser")
   if config.preview_mode == "reader" then
     local reader = require("markdown-table-wrap.reader")
@@ -1117,6 +1123,42 @@ local function create_autocmds()
     callback = function(args)
       local bufnr = args.buf ~= 0 and args.buf or vim.api.nvim_get_current_buf()
       require("markdown-table-wrap.reader").invalidate_source_view(bufnr, vim.api.nvim_get_current_win())
+    end,
+  })
+
+  -- refresh_auto() block new Reader open in diff window. But window can
+  -- be Reader already before diff turn on (open normal, then diffthis).
+  -- Diff need real buffer. Drop back to source when that happen.
+  vim.api.nvim_create_autocmd("DiffUpdated", {
+    group = M.state.augroup,
+    callback = function()
+      -- DiffUpdated fire mid-command sometime (inside :diffsplit).
+      -- Buffer switch not allowed then (E788). Defer to next tick.
+      vim.schedule(function()
+        local reader = require("markdown-table-wrap.reader")
+        for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+          if vim.api.nvim_win_is_valid(winid) and vim.wo[winid].diff then
+            local bufnr = vim.api.nvim_win_get_buf(winid)
+            if reader.is_reader(bufnr) then
+              reader.close(bufnr)
+              -- Buffer swap kill 'diff' on window, even swap back to
+              -- window own source buffer. Re-diffthis to fix.
+              if vim.api.nvim_win_is_valid(winid) then
+                vim.api.nvim_win_call(winid, function()
+                  vim.cmd("diffthis")
+                end)
+              end
+            end
+          elseif vim.api.nvim_win_is_valid(winid) then
+            -- Diff just turn off here. Nothing else fire after :diffoff,
+            -- so poke auto-preview ourself instead of wait forever.
+            local bufnr = vim.api.nvim_win_get_buf(winid)
+            if is_auto_preview_buffer(bufnr) and not reader.is_reader(bufnr) then
+              M.schedule_refresh({ bufnr = bufnr, winid = winid, silent = true })
+            end
+          end
+        end
+      end)
     end,
   })
 
